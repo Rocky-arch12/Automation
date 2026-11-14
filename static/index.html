@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaSignal AI — Telegram Trading Signal Intelligence</title>
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <!-- Google Fonts — Inter for clean dashboard typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+  <!-- [ReactBits: Particles / Sparkles] — Floating background particles -->
+  <canvas id="sparkle-canvas"></canvas>
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="brand-area">
+      <div class="brand-logo">α</div>
+      <div>
+        <h1 class="brand-title">AlphaSignal AI</h1>
+        <p class="brand-tagline">Autonomous Telegram Signal Intelligence & Intent Filter</p>
+      </div>
+    </div>
+
+    <div class="header-status-group">
+      <!-- Telegram Listener Status -->
+      <div class="status-badge" id="tg-status-badge">
+        <span class="pulse-dot idle" id="tg-pulse"></span>
+        <span id="tg-status-text">Telegram: Standby</span>
+      </div>
+
+      <!-- AI Provider Status -->
+      <div class="status-badge" id="ai-status-badge">
+        <i data-lucide="cpu" style="width: 14px; height: 14px; color: #60a5fa;"></i>
+        <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
+      </div>
+
+      <!-- XM MT5 Broker Status -->
+      <div class="status-badge" id="xm-status-badge" onclick="openSettingsModal()"
+        style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
+        title="XM MT5 Demo Broker Execution Status (Click to configure)">
+        <i data-lucide="zap" style="width: 14px; height: 14px; color: #f59e0b;"></i>
+        <span id="xm-status-text">XM MT5: Demo Active</span>
+      </div>
+
+      <!-- WebSocket Real-time Status -->
+      <div class="status-badge" id="ws-status-badge">
+        <i data-lucide="activity" style="width: 14px; height: 14px; color: #10b981;"></i>
+        <span id="ws-status-text">Live: Connecting...</span>
+      </div>
+
+      <!-- Actions -->
+      <button class="btn btn-secondary" onclick="openSettingsModal()">
+        <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
+        Settings
+      </button>
+      <button class="btn btn-danger" onclick="confirmClearData()">
+        <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
+        Clear
+      </button>
+    </div>
+  </header>
+
+  <!-- Top KPI Stats Banner -->
+  <section class="stats-grid">
+    <div class="stat-card total">
+      <div class="stat-label">Total Messages Monitored</div>
+      <div class="stat-value" id="kpi-total">0</div>
+      <div class="stat-sub">From Telegram channel & simulator</div>
+    </div>
+
+    <div class="stat-card trades">
+      <div class="stat-label">Valid Trade Signals</div>
+      <div class="stat-value" id="kpi-trades" style="color: #34d399;">0</div>
+      <div class="stat-sub" id="kpi-trades-sub">New signals & entry setups</div>
+    </div>
+
+    <div class="stat-card chatter">
+      <div class="stat-label">Chatter Filtered Out</div>
+      <div class="stat-value" id="kpi-chatter" style="color: #c084fc;">0</div>
+      <div class="stat-sub" id="kpi-noise-rate">0% noise rejection</div>
+    </div>
+
+    <div class="stat-card latency">
+      <div class="stat-label">Avg AI Latency</div>
+      <div class="stat-value" id="kpi-latency" style="color: #60a5fa;">0 ms</div>
+      <div class="stat-sub" id="kpi-confidence">0% average confidence</div>
+    </div>
+  </section>
+
+  <!-- Main Split Layout -->
+  <main class="main-layout">
+    <!-- Left Pane: Real-Time Signal Stream -->
+    <div class="panel-container">
+      <div class="panel-header">
+        <div class="panel-title">
+          <i data-lucide="radio" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+          Live Signal Feed & Decision Stream
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; align-items: center;">
+          <input type="text" id="feed-search" class="form-control" placeholder="Search signals, coins..."
+            style="width: 180px; padding: 0.3rem 0.6rem; font-size: 0.75rem;" oninput="debounceSearch()">
+          <div class="filter-tabs">
+            <button class="filter-tab active" onclick="setFilter('ALL', this)">All</button>
+            <button class="filter-tab" onclick="setFilter('TRADES', this)">Trades</button>
+            <button class="filter-tab" onclick="setFilter('TRADE_UPDATE', this)">Updates</button>
+            <button class="filter-tab" onclick="setFilter('CHATTER', this)">Chatter</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feed List Container -->
+      <div class="feed-stream" id="message-feed">
+        <!-- Signal cards injected dynamically -->
+        <div style="text-align: center; color: var(--text-dim); padding: 3rem 1rem;">
+          <i data-lucide="inbox" style="width: 36px; height: 36px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+          <p>No messages recorded yet.</p>
+          <p style="font-size: 0.75rem; margin-top: 0.25rem;">Use the simulator on the right or send a message to your
+            Telegram channel to see real-time AI parsing in action!</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Pane: Simulator / Active Signals / Terminal -->
+    <div class="panel-container">
+      <div class="tab-container">
+        <!-- Navigation Tabs -->
+        <div class="tab-nav">
+          <button class="tab-nav-btn active" onclick="switchRightTab('simulator', this)">
+            <i data-lucide="play-circle"
+              style="width: 15px; height: 15px; display: inline-block; vertical-align: middle; margin-right: 4px;"></i>
+            Signal Simulator
+          </button>
+          <button class="tab-nav-btn" onclick="switchRightTab('watchlist', this)">
+            <i data-lucide="trending-up"
+              style="width: 15px; height: 15px; display: inline-block; vertical-align: middle; margin-right: 4px;"></i>
+            Trade Watchlist
+          </button>
+          <button class="tab-nav-btn" onclick="switchRightTab('terminal', this)">
+            <i data-lucide="terminal"
+              style="width: 15px; height: 15px; display: inline-block; vertical-align: middle; margin-right: 4px;"></i>
+            Live Terminal
+          </button>
+        </div>
+
+        <!-- Tab 1: Simulator -->
+        <div class="tab-content" id="tab-simulator">
+          <div class="presets-group">
+            <div class="presets-label">⚡ Test Trade Outcomes & Owner Intent (Click to inject)</div>
+            <div class="chips-wrap">
+              <button class="chip-btn" onclick="applyPreset('pending_setup')">⏳ Pending Setup (Wait for Tap)</button>
+              <button class="chip-btn" onclick="applyPreset('level_tapped')"
+                style="border-color: #f59e0b; color: #fbbf24;">🔔 Level Taped (Alert)</button>
+              <button class="chip-btn" onclick="applyPreset('negation_wait')"
+                style="border-color: #f43f5e; color: #fda4af;">⚠️ Negation (Active Mat Krna)</button>
+              <button class="chip-btn" onclick="applyPreset('early_active')">⚡ Early Exec (Active Sign)</button>
+              <button class="chip-btn" onclick="applyPreset('partial_1to1')">🎯 4. 1:1 Done (Book Partial)</button>
+              <button class="chip-btn" onclick="applyPreset('risk_free')">🛡️ 3. Risk Free (Break Even)</button>
+              <button class="chip-btn" onclick="applyPreset('full_tp')">🏆 2. Full TP Hit</button>
+              <button class="chip-btn" onclick="applyPreset('sl_hit')">🛑 1. SL Hit</button>
+              <button class="chip-btn" onclick="applyPreset('level_not_tapped')">❌ 5. Level Not Tapped (Cancel)</button>
+              <button class="chip-btn" onclick="applyPreset('weekend_chatter')">🎉 Weekend Chatter</button>
+            </div>
+          </div>
+
+          <form id="simulator-form" onsubmit="submitSimulation(event)">
+            <div class="form-group">
+              <label class="form-label">Simulated Sender Name</label>
+              <input type="text" id="sim-sender" class="form-control" value="Channel Owner">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Channel Name</label>
+              <input type="text" id="sim-channel" class="form-control" value="VIP Forex & Crypto Signals">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Message Content (Text, Slang, Pips, SL/TP, or Casual Talk)</label>
+              <textarea id="sim-text" class="form-control"
+                placeholder="E.g., BUY GOLD 2640-2642 SL 2634 TP1 2648... or '1:1 DONE book partial' or 'RISK FREE KRDO'"></textarea>
+            </div>
+
+            <!-- Image Upload Dropzone -->
+            <div class="form-group">
+              <label class="form-label">Attach Chart Screenshot / Image (Optional for Vision AI)</label>
+              <div class="dropzone" id="dropzone" onclick="document.getElementById('sim-file').click()">
+                <i data-lucide="image" style="width: 24px; height: 24px; color: #64748b; margin-bottom: 0.25rem;"></i>
+                <div class="dropzone-text">Click to upload or drag screenshot here</div>
+                <div style="font-size: 0.65rem; color: var(--text-dim); margin-top: 0.2rem;">Supports PNG, JPG, WEBP
+                  (MT4/5 screenshots, TradingView charts)</div>
+                <input type="file" id="sim-file" accept="image/*" style="display: none;"
+                  onchange="handleFileSelected(this)">
+                <div id="file-preview-badge" style="display: none;" class="image-preview-badge">
+                  <span id="file-name-text">filename.png</span>
+                  <i data-lucide="x" style="width: 14px; height: 14px; cursor: pointer;"
+                    onclick="clearFileSelected(event)"></i>
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary"
+              style="width: 100%; justify-content: center; padding: 0.75rem;" id="sim-submit-btn">
+              <i data-lucide="send" style="width: 16px; height: 16px;"></i>
+              Send & Interpret Intent Instantly
+            </button>
+          </form>
+        </div>
+
+        <!-- Tab 2: Active Trade Watchlist & Lifecycle Manager -->
+        <div class="tab-content" id="tab-watchlist" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <div>
+              <div style="font-size: 0.85rem; font-weight: 700; color: #f8fafc;">Unique Trade Lifecycle & Outcomes</div>
+              <div style="font-size: 0.7rem; color: var(--text-muted);">Disambiguates multiple trades per asset; tracks
+                the 6 execution outcomes.</div>
+            </div>
+            <button class="btn btn-sm btn-outline" onclick="loadTrades()" title="Refresh Trades"
+              style="padding: 0.25rem 0.6rem; font-size: 0.7rem;">
+              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> Refresh
+            </button>
+          </div>
+
+          <!-- Outcome Filter Pills -->
+          <div class="chips-wrap" style="margin-bottom: 0.75rem;">
+            <button class="chip-btn active" onclick="setTradeFilter('ALL', this)">All</button>
+            <button class="chip-btn" onclick="setTradeFilter('ACTIVE', this)">Active</button>
+            <button class="chip-btn" onclick="setTradeFilter('LEVEL_TAPPED', this)"
+              style="border-color: #f59e0b; color: #fbbf24;">🔔 Level Tapped</button>
+            <button class="chip-btn" onclick="setTradeFilter('PARTIAL_1_TO_1', this)"
+              style="border-color: #8b5cf6; color: #c084fc;">🎯 1:1 Given</button>
+            <button class="chip-btn" onclick="setTradeFilter('BREAK_EVEN', this)"
+              style="border-color: #06b6d4; color: #67e8f9;">🛡️ Break Even</button>
+            <button class="chip-btn" onclick="setTradeFilter('TP_HIT', this)"
+              style="border-color: #10b981; color: #6ee7b7;">🏆 TP Hit</button>
+            <button class="chip-btn" onclick="setTradeFilter('SL_HIT', this)"
+              style="border-color: #ef4444; color: #fca5a5;">🛑 SL Hit</button>
+            <button class="chip-btn" onclick="setTradeFilter('MISSED_NOT_TAPPED', this)">❌ Not Tapped</button>
+            <button class="chip-btn" onclick="setTradeFilter('EARLY_EXECUTION', this)"
+              style="border-color: #f59e0b; color: #fcd34d;">⚡ Early Exec</button>
+          </div>
+
+          <!-- Trades List Container -->
+          <div id="watchlist-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div style="text-align: center; color: var(--text-dim); padding: 2rem;">Loading trades...</div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Live Terminal -->
+        <div class="tab-content" id="tab-terminal" style="display: none; height: 100%; padding: 0.75rem;">
+          <div class="terminal-window" id="terminal-logs">
+            <div class="log-entry">
+              <span class="log-time">[System]</span>
+              <span class="log-level-INFO">[INFO]</span>
+              <span class="log-msg">Terminal ready. Real-time background events will appear here.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settings-modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div style="font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <i data-lucide="sliders" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+          System Settings & Integrations
+        </div>
+        <button class="close-btn" onclick="closeSettingsModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- AI Engine Section -->
+        <div style="margin-bottom: 1.5rem;">
+          <h3
+            style="font-size: 0.85rem; text-transform: uppercase; color: #60a5fa; margin-bottom: 0.75rem; font-weight: 700;">
+            1. Free AI Provider Configuration</h3>
+
+          <div class="form-group">
+            <label class="form-label">Active AI Provider</label>
+            <select id="setting-provider" class="form-control" onchange="toggleProviderFields()">
+              <option value="groq">Groq API (Recommended — 100% Free Tier, Ultra Fast)</option>
+              <option value="gemini">Google Gemini API (100% Free Tier, Multimodal)</option>
+            </select>
+          </div>
+
+          <!-- Groq Config -->
+          <div id="groq-fields">
+            <div class="form-group">
+              <label class="form-label">
+                Groq API Key
+                <a href="https://console.groq.com/keys" target="_blank"
+                  style="color: #60a5fa; font-size: 0.7rem; float: right; text-decoration: underline;">Get Free Groq Key
+                  &rarr;</a>
+              </label>
+              <input type="password" id="setting-groq-key" class="form-control" placeholder="gsk_...">
+              <small style="color: var(--text-dim); font-size: 0.7rem;">Free tier with high limits. Never
+                charged.</small>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Groq Text Model</label>
+              <input type="text" id="setting-groq-model" class="form-control" value="llama-3.3-70b-versatile">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Groq Vision Model (for Chart Screenshots)</label>
+              <input type="text" id="setting-groq-vision-model" class="form-control"
+                value="llama-3.2-11b-vision-preview">
+            </div>
+          </div>
+
+          <!-- Gemini Config -->
+          <div id="gemini-fields" style="display: none;">
+            <div class="form-group">
+              <label class="form-label">
+                Google Gemini API Key
+                <a href="https://aistudio.google.com/app/apikey" target="_blank"
+                  style="color: #60a5fa; font-size: 0.7rem; float: right; text-decoration: underline;">Get Free Gemini
+                  Key &rarr;</a>
+              </label>
+              <input type="password" id="setting-gemini-key" class="form-control" placeholder="AIzaSy...">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Gemini Model</label>
+              <input type="text" id="setting-gemini-model" class="form-control" value="gemini-1.5-flash">
+            </div>
+          </div>
+        </div>
+
+        <!-- Telegram Listener Section -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
+          <h3
+            style="font-size: 0.85rem; text-transform: uppercase; color: #34d399; margin-bottom: 0.75rem; font-weight: 700;">
+            2. Telegram Channel Listener</h3>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+            To listen to a live test channel: create a bot with <a href="https://t.me/BotFather" target="_blank"
+              style="color: #60a5fa;">@BotFather</a>, add it as administrator to your test channel or group, and paste
+            the token below.
+          </p>
+
+          <div
+            style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem;">
+            <div style="font-weight: 700; font-size: 0.8rem; color: #34d399; margin-bottom: 0.25rem;">
+              <i data-lucide="check-circle"
+                style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;"></i>
+              Telegram Account Connected: @Crazy542
+            </div>
+            <p style="font-size: 0.7rem; color: #cbd5e1; margin-bottom: 0.5rem;">
+              You are logged in via your Telegram API ID. Enter your test channel name (or leave empty to listen to
+              ALPHA PREMIUM):
+            </p>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+              <input type="text" id="setting-userbot-channel" class="form-control"
+                placeholder="Channel name (e.g. My Test Channel)" style="font-size: 0.75rem; padding: 0.4rem 0.6rem;">
+            </div>
+            <button class="btn btn-primary" onclick="startClientListener()"
+              style="background: linear-gradient(135deg, #059669, #10b981); width: 100%; justify-content: center;">
+              <i data-lucide="radio" style="width: 14px; height: 14px;"></i>
+              Start Live Channel Listener
+            </button>
+          </div>
+
+          <div style="font-size: 0.75rem; color: var(--text-dim); text-align: center; margin-bottom: 0.75rem;">— OR USE
+            TELEGRAM BOT FOR TEST CHANNELS —</div>
+
+          <div class="form-group">
+            <label class="form-label">Telegram Bot Token (Optional for test channels)</label>
+            <input type="password" id="setting-bot-token" class="form-control"
+              placeholder="123456789:ABCdefGhIJKlmNoPQRstuVWxYZ">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Target Channel / Chat ID (Optional filter)</label>
+            <input type="text" id="setting-channel-id" class="form-control"
+              placeholder="e.g. -100123456789 or leave empty to listen to all joined chats">
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+            <button class="btn btn-secondary" onclick="startTelegramBot()" id="btn-start-bot">
+              <i data-lucide="play" style="width: 14px; height: 14px;"></i>
+              Start Bot Listener
+            </button>
+            <button class="btn btn-secondary" onclick="stopTelegramBot()" id="btn-stop-bot">
+              <i data-lucide="square" style="width: 14px; height: 14px;"></i>
+              Stop All Listeners
+            </button>
+          </div>
+        </div>
+
+        <!-- Section 3: XM MT5 Broker & Automated Trading -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
+          <h3
+            style="font-size: 0.85rem; text-transform: uppercase; color: #f59e0b; margin-bottom: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between;">
+            <span>3. XM MT5 Broker & Automated Execution</span>
+            <span
+              style="font-size: 0.65rem; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.4); padding: 0.15rem 0.45rem; border-radius: 4px; color: #fbbf24;">Demo
+              & Live Supported</span>
+          </h3>
+
+          <!-- Strict Risk Rules Banner -->
+          <div
+            style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; font-size: 0.72rem; line-height: 1.45;">
+            <div
+              style="font-weight: 700; color: #93c5fd; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.35rem;">
+              <i data-lucide="shield-check" style="width: 13px; height: 13px; color: #38bdf8;"></i> Active Execution &
+              Safety Shield Rules:
+            </div>
+            <ul style="padding-left: 1.2rem; color: #cbd5e1; margin: 0.25rem 0;">
+              <li><strong style="color: #fbbf24;">Gold (XAUUSD):</strong> Fixed <strong>0.02 lots</strong> always (exits
+                0.01 at 1:1).</li>
+              <li><strong style="color: #f97316;">Bitcoin (BTC):</strong> Fixed <strong>0.04 lots</strong> always (exits
+                0.02 at 1:1).</li>
+              <li><strong style="color: #34d399;">Other Assets:</strong> Dynamically calculated for <strong>Max $15 USD
+                  Risk</strong> at SL (min 0.02 lots).</li>
+              <li><strong style="color: #38bdf8;">1:1 Target Rule:</strong> Automatically <strong>exit 50%
+                  lots</strong>, drag <strong>SL to Entry (Break Even)</strong>, and stretch <strong>TP to 1:2</strong>.
+              </li>
+              <li><strong style="color: #f87171;">Mandatory Guard:</strong> Never place a trade without a valid SL & TP.
+              </li>
+            </ul>
+          </div>
+
+          <div class="form-group"
+            style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.6rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color);">
+            <div>
+              <div style="font-size: 0.8rem; font-weight: 600; color: #f8fafc;">Enable Automated XM Execution</div>
+              <div style="font-size: 0.68rem; color: var(--text-dim);">When enabled, valid signals are automatically
+                sent to your XM MT5 account.</div>
+            </div>
+            <input type="checkbox" id="setting-xm-auto" checked
+              style="width: 18px; height: 18px; cursor: pointer; accent-color: #10b981;">
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="form-group">
+              <label class="form-label">XM MT5 Login / Account #</label>
+              <input type="text" id="setting-xm-login" class="form-control" placeholder="e.g. 52189432">
+            </div>
+            <div class="form-group">
+              <label class="form-label">XM MT5 Server Name</label>
+              <input type="text" id="setting-xm-server" class="form-control" placeholder="e.g. XMGlobal-MT5-Demo"
+                value="XMGlobal-MT5-Demo">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">XM MT5 Trading Password</label>
+            <input type="password" id="setting-xm-password" class="form-control"
+              placeholder="Your XM MT5 Demo Password">
+            <small style="color: var(--text-dim); font-size: 0.68rem;">Stored locally only on your PC in encrypted
+              config.</small>
+          </div>
+        </div>
+
+        <!-- Section 4: 24/7 Hosting & Remote Vercel Bridge -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
+          <h3
+            style="font-size: 0.85rem; text-transform: uppercase; color: #a855f7; margin-bottom: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between;">
+            <span>4. 24/7 Free Hosting & Vercel Bridge</span>
+            <span
+              style="font-size: 0.65rem; background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4); padding: 0.15rem 0.45rem; border-radius: 4px; color: #c084fc;">Free
+              Tier</span>
+          </h3>
+
+          <div class="form-group">
+            <label class="form-label">Remote Backend Tunnel / API URL (Leave blank for local host)</label>
+            <input type="text" id="setting-api-url" class="form-control"
+              placeholder="e.g. https://your-tunnel.trycloudflare.com or https://your-server.ngrok-free.app">
+            <div style="font-size: 0.68rem; color: var(--text-dim); margin-top: 0.35rem;">
+              When hosting the frontend on Vercel, enter your free Cloudflare Tunnel / Ngrok URL here so the UI can
+              connect to your MT5 Python backend 24/7.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveSettings()">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JSON Raw Inspection Modal -->
+  <div class="modal-overlay" id="json-modal" style="display: none;">
+    <div class="modal-content" style="max-width: 680px;">
+      <div class="modal-header">
+        <div style="font-weight: 700; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <i data-lucide="code" style="width: 18px; height: 18px; color: #38bdf8;"></i>
+          Raw AI Intent & Extraction Payload
+        </div>
+        <button class="close-btn" onclick="closeJsonModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <pre class="code-json" id="json-viewer"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeJsonModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=5"></script>
+</body>
+
+</html>

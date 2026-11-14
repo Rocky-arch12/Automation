@@ -1,0 +1,23 @@
+# Secrets & Authentication
+.env
+*.session
+*.session-journal
+
+# Database & Local State
+signals.db
+signals.db-wal
+signals.db-shm
+*.db
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Large Binaries
+cloudflared.exe
+*.exe
+
+# Uploads
+uploads/

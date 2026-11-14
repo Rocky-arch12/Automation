@@ -1,0 +1,1156 @@
+// AlphaSignal AI Frontend Application
+
+const API_BASE = localStorage.getItem("API_BACKEND_URL") || "";
+
+function getApiUrl(endpoint) {
+  if (!API_BASE || endpoint.startsWith("http")) return endpoint;
+  const base = API_BASE.replace(/\/$/, "");
+  return endpoint.startsWith("/") ? `${base}${endpoint}` : `${base}/${endpoint}`;
+}
+
+// Auto-route all /api calls to remote backend if API_BASE is configured (e.g. on Vercel)
+const _origFetch = window.fetch;
+window.fetch = function (url, options) {
+  if (typeof url === "string" && (url.startsWith("/api") || url.startsWith("/uploads"))) {
+    return _origFetch(getApiUrl(url), options);
+  }
+  return _origFetch(url, options);
+};
+
+let currentFilter = "ALL";
+let currentSearch = "";
+let searchTimeout = null;
+let selectedFile = null;
+let messagesCache = [];
+let ws = null;
+
+// Initialize when DOM is ready
+document.addEventListener("DOMContentLoaded", () => {
+  initIcons();
+  initParticles();
+  initSpotlight();
+  setupDragAndDrop();
+  connectWebSocket();
+  loadSystemStatus();
+  renderFeedSkeleton();
+  renderTradesSkeleton();
+  loadStats();
+  loadMessages();
+  loadTrades();
+  loadLogs();
+
+  // Refresh stats periodically
+  setInterval(loadStats, 10000);
+});
+
+// [ReactBits: Particles / Sparkles Canvas Background]
+function initParticles() {
+  const canvas = document.getElementById("sparkle-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  let width, height;
+  let particles = [];
+
+  function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  const colors = ["rgba(59, 130, 246, ", "rgba(139, 92, 246, ", "rgba(16, 185, 129, ", "rgba(56, 189, 248, "];
+
+  for (let i = 0; i < 35; i++) {
+    particles.push({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      r: Math.random() * 1.8 + 0.6,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      alpha: Math.random() * 0.5 + 0.2,
+      pulseSpeed: Math.random() * 0.02 + 0.005,
+    });
+  }
+
+  function loop() {
+    ctx.clearRect(0, 0, width, height);
+    for (let p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.alpha += Math.sin(Date.now() * p.pulseSpeed) * 0.005;
+      if (p.x < 0) p.x = width;
+      if (p.x > width) p.x = 0;
+      if (p.y < 0) p.y = height;
+      if (p.y > height) p.y = 0;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = p.color + Math.max(0.1, Math.min(0.65, p.alpha)) + ")";
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = p.color + "0.6)";
+      ctx.fill();
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+// [ReactBits: Spotlight Card] Mouse tracking
+function initSpotlight() {
+  document.addEventListener("mousemove", (e) => {
+    const cards = document.querySelectorAll(".stat-card, .signal-card, .trade-tracker-card, .panel-container");
+    const cx = e.clientX;
+    const cy = e.clientY;
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
+      const rect = card.getBoundingClientRect();
+      const x = cx - rect.left;
+      const y = cy - rect.top;
+      if (x >= -40 && x <= rect.width + 40 && y >= -40 && y <= rect.height + 40) {
+        card.style.setProperty("--mouse-x", `${x}px`);
+        card.style.setProperty("--mouse-y", `${y}px`);
+      }
+    }
+  });
+}
+
+// [ReactBits: Custom Toast Notification]
+function showToast(message, type = "info") {
+  const existing = document.querySelectorAll(".toast-notification");
+  existing.forEach(t => t.remove());
+
+  const toast = document.createElement("div");
+  toast.className = `toast-notification toast-${type}`;
+  const icon = type === "success" ? "check-circle" : type === "error" ? "alert-triangle" : "info";
+  const iconColor = type === "success" ? "#34d399" : type === "error" ? "#f87171" : "#60a5fa";
+
+  toast.innerHTML = `
+    <i data-lucide="${icon}" style="width: 16px; height: 16px; flex-shrink: 0; color: ${iconColor};"></i>
+    <span>${escapeHtml(message)}</span>
+  `;
+  document.body.appendChild(toast);
+  initIcons();
+
+  setTimeout(() => {
+    if (toast.parentElement) toast.remove();
+  }, 4200);
+}
+
+// [ReactBits: Counter / CountUp with spring bounce & pop]
+const prevCounters = {};
+function animateCount(elementId, targetValue, duration = 800, prefix = "", suffix = "") {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+
+  const currentVal = prevCounters[elementId] || 0;
+  targetValue = Number(targetValue) || 0;
+
+  if (currentVal === targetValue && el.innerText !== "") {
+    el.innerText = `${prefix}${targetValue.toLocaleString()}${suffix}`;
+    return;
+  }
+
+  prevCounters[elementId] = targetValue;
+  el.classList.remove("counter-pop");
+  void el.offsetWidth; // Trigger reflow
+  el.classList.add("counter-pop");
+
+  const startTime = performance.now();
+  function update(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+    const value = Math.round(currentVal + (targetValue - currentVal) * ease);
+    el.innerText = `${prefix}${value.toLocaleString()}${suffix}`;
+    if (progress < 1) {
+      requestAnimationFrame(update);
+    } else {
+      el.innerText = `${prefix}${targetValue.toLocaleString()}${suffix}`;
+    }
+  }
+  requestAnimationFrame(update);
+}
+
+function renderFeedSkeleton() {
+  const container = document.getElementById("message-feed");
+  if (!container || (container.children.length > 0 && !container.querySelector(".skeleton"))) return;
+  container.innerHTML = `
+    <div class="signal-card skeleton-card skeleton" style="opacity: 0.5;"></div>
+    <div class="signal-card skeleton-card skeleton" style="opacity: 0.4;"></div>
+    <div class="signal-card skeleton-card skeleton" style="opacity: 0.3;"></div>
+  `;
+}
+
+function renderTradesSkeleton() {
+  const container = document.getElementById("watchlist-container");
+  if (!container || (container.children.length > 0 && !container.querySelector(".skeleton"))) return;
+  container.innerHTML = `
+    <div class="trade-tracker-card skeleton-card skeleton" style="opacity: 0.5;"></div>
+    <div class="trade-tracker-card skeleton-card skeleton" style="opacity: 0.35;"></div>
+  `;
+}
+
+function initIcons() {
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+}
+
+// WebSocket Connection
+function connectWebSocket() {
+  let wsUrl;
+  if (API_BASE) {
+    const wsProto = API_BASE.startsWith("https") ? "wss:" : "ws:";
+    const host = API_BASE.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    wsUrl = `${wsProto}//${host}/ws`;
+  } else {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    wsUrl = `${protocol}//${window.location.host}/ws`;
+  }
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    updateWsStatus(true, "Live: Connected");
+    appendLog("INFO", "SYSTEM", "Real-time WebSocket stream connected.");
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "NEW_SIGNAL" || msg.type === "NEW_MESSAGE") {
+        handleIncomingMessage(msg.data);
+      } else if (msg.type === "TRADE_UPDATED") {
+        loadTrades();
+        loadMessages();
+        loadStats();
+      } else if (msg.type === "SYSTEM_STATUS") {
+        updateListenerStatus(msg.data.listener_running, msg.data.listener_mode);
+      }
+    } catch (e) {
+      console.error("WS Parse error", e);
+    }
+  };
+
+  ws.onclose = () => {
+    updateWsStatus(false, "Live: Reconnecting...");
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = (err) => {
+    console.warn("WS error:", err);
+    updateWsStatus(false, "Live: Offline");
+  };
+}
+
+function updateWsStatus(connected, text) {
+  const el = document.getElementById("ws-status-text");
+  const badge = document.getElementById("ws-status-badge");
+  if (el) el.innerText = text;
+  if (badge) {
+    badge.style.borderColor = connected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)";
+  }
+}
+
+function updateListenerStatus(running, mode) {
+  const pulse = document.getElementById("tg-pulse");
+  const text = document.getElementById("tg-status-text");
+  if (!pulse || !text) return;
+
+  if (running) {
+    pulse.className = "pulse-dot";
+    text.innerText = `Telegram: Listening (${mode})`;
+  } else {
+    pulse.className = "pulse-dot idle";
+    text.innerText = "Telegram: Standby";
+  }
+}
+
+// Load System Status
+async function loadSystemStatus() {
+  try {
+    const res = await fetch("/api/status");
+    const data = await res.json();
+
+    updateListenerStatus(data.listener.running, data.listener.mode);
+
+    const aiEl = document.getElementById("ai-status-text");
+    if (aiEl) {
+      aiEl.innerText = `AI: ${data.ai.mode}`;
+    }
+
+    // Load XM MT5 status
+    try {
+      const xmRes = await fetch("/api/xm/status");
+      const xm = await xmRes.json();
+      const xmEl = document.getElementById("xm-status-text");
+      const xmBadge = document.getElementById("xm-status-badge");
+      if (xmEl && xm) {
+        const bal = xm.account ? `$${xm.account.balance.toLocaleString()}` : "";
+        if (xm.auto_execution) {
+          xmEl.innerText = `XM MT5: Demo Active (${bal})`;
+          if (xmBadge) xmBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
+        } else {
+          xmEl.innerText = `XM MT5: Execution Off`;
+          if (xmBadge) xmBadge.style.borderColor = "rgba(100, 116, 139, 0.4)";
+        }
+      }
+    } catch (xe) {
+      console.warn("XM status check", xe);
+    }
+  } catch (e) {
+    console.error("Failed to load status", e);
+  }
+}
+
+// Load KPI Stats with ReactBits CountUp animation
+async function loadStats() {
+  try {
+    const res = await fetch("/api/stats");
+    const stats = await res.json();
+
+    animateCount("kpi-total", stats.total_messages || 0);
+    animateCount("kpi-trades", stats.total_trades || 0);
+    animateCount("kpi-chatter", stats.total_chatter || 0);
+    animateCount("kpi-latency", stats.avg_latency_ms || 0, 800, "", " ms");
+
+    const noiseEl = document.getElementById("kpi-noise-rate");
+    if (noiseEl) noiseEl.innerText = `${stats.noise_filter_ratio || 0}% noise rejected`;
+
+    const confEl = document.getElementById("kpi-confidence");
+    if (confEl) confEl.innerText = `${stats.avg_confidence || 0}% avg confidence`;
+
+    updateWatchlist(messagesCache);
+  } catch (e) {
+    console.error("Failed to load stats", e);
+  }
+}
+
+// Load Messages Feed
+async function loadMessages() {
+  try {
+    let url = `/api/messages?limit=60&intent_filter=${encodeURIComponent(currentFilter)}`;
+    if (currentSearch) {
+      url += `&search=${encodeURIComponent(currentSearch)}`;
+    }
+    const res = await fetch(url);
+    const data = await res.json();
+    messagesCache = data.messages || [];
+    renderFeed(messagesCache);
+    updateWatchlist(messagesCache);
+  } catch (e) {
+    console.error("Failed to load messages", e);
+  }
+}
+
+// Render Message Feed Cards
+function renderFeed(messages) {
+  const container = document.getElementById("message-feed");
+  if (!container) return;
+
+  if (!messages || messages.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-dim); padding: 3rem 1rem;">
+        <i data-lucide="inbox" style="width: 36px; height: 36px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+        <p>No messages match current filter (${currentFilter}).</p>
+      </div>
+    `;
+    initIcons();
+    return;
+  }
+
+  container.innerHTML = messages.map(msg => createSignalCardHtml(msg)).join("");
+  initIcons();
+}
+
+function getOutcomeBadgeClass(status) {
+  const map = {
+    'PARTIAL_1_TO_1': 'badge-1to1',
+    'BREAK_EVEN': 'badge-breakeven',
+    'TP_HIT': 'badge-tp-hit',
+    'SL_HIT': 'badge-sl-hit',
+    'MISSED_NOT_TAPPED': 'badge-missed',
+    'EARLY_EXECUTION': 'badge-early',
+    'LEVEL_TAPPED': 'badge-tapped',
+    'ACTIVE': 'badge-active',
+    'PENDING': 'badge-pending'
+  };
+  return map[status] || 'badge-active';
+}
+
+function createSignalCardHtml(msg) {
+  const intent = msg.intent || "CHATTER";
+  const action = msg.action || "NONE";
+  const isBuy = action.includes("BUY") || action === "LONG";
+  const isSell = action.includes("SELL") || action === "SHORT";
+  const isUpdate = intent === "TRADE_UPDATE" || action.includes("MODIFY") || action.includes("PARTIAL");
+  const isChatter = intent === "CHATTER";
+
+  let cardClass = "signal-card";
+  let badgeClass = "intent-badge chatter";
+  let badgeIcon = "message-circle";
+
+  if (isBuy) {
+    cardClass += " trade-card";
+    badgeClass = "intent-badge buy";
+    badgeIcon = "arrow-up-right";
+  } else if (isSell) {
+    cardClass += " sell-card";
+    badgeClass = "intent-badge sell";
+    badgeIcon = "arrow-down-right";
+  } else if (isUpdate) {
+    cardClass += " update-card";
+    badgeClass = "intent-badge update";
+    badgeIcon = "refresh-cw";
+  }
+
+  const timeFormatted = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now';
+  const confidence = msg.confidence || 0;
+
+  // Format TP levels
+  let tpDisplay = "N/A";
+  if (Array.isArray(msg.tp_levels) && msg.tp_levels.length > 0) {
+    tpDisplay = msg.tp_levels.map((t, idx) => `TP${idx + 1}: ${t}`).join(" | ");
+  }
+
+  const safeJsonData = encodeURIComponent(JSON.stringify(msg));
+
+  return `
+    <div class="${cardClass}" id="msg-card-${msg.message_id}">
+      <div class="signal-card-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span class="sender-tag">${escapeHtml(msg.sender || "Channel Owner")}</span>
+          <span style="font-size: 0.7rem; color: var(--text-dim);">in ${escapeHtml(msg.channel_title || "Channel")}</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span class="source-pill">${msg.source || "telegram"}</span>
+          <span>${timeFormatted}</span>
+        </div>
+      </div>
+
+      <!-- Raw Telegram Message -->
+      <div class="raw-message-box">
+        ${escapeHtml(msg.text || "[Image Broadcast]")}
+        ${(() => {
+      if (!msg.media_path) return "";
+      let p = msg.media_path.replace(/\\/g, '/');
+      if (p.includes('uploads/')) p = p.substring(p.indexOf('uploads/'));
+      else if (p.includes('sample_signals/')) p = p.substring(p.indexOf('sample_signals/'));
+      if (!p.startsWith('/')) p = '/' + p;
+      return `<div style="margin-top: 0.6rem;"><img src="${p}" class="raw-image-thumb" onclick="window.open(this.src)" title="Click to view full image" onerror="this.parentElement.style.display='none'"></div>`;
+    })()}
+      </div>
+
+      <!-- AI Interpretation Box -->
+      <div class="ai-box">
+        ${msg.trade_id ? `
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.65rem; padding: 0.35rem 0.65rem; background: rgba(15, 23, 42, 0.7); border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.25);">
+            <span class="trade-id-pill" onclick="switchRightTab('watchlist'); filterToTrade('${msg.trade_id}')" title="Click to view full lifecycle in Trade Watchlist">
+              <i data-lucide="tag" style="width: 11px; height: 11px;"></i> #${msg.trade_id}
+            </span>
+            ${msg.trade_status ? `
+              <span class="outcome-badge ${getOutcomeBadgeClass(msg.trade_status)}">
+                ${escapeHtml(msg.trade_outcome || msg.trade_status)}
+              </span>
+            ` : ''}
+          </div>
+        ` : ''}
+
+        <div class="ai-box-header">
+          <div style="display: flex; align-items: center; gap: 0.6rem;">
+            <span class="${badgeClass}">
+              <i data-lucide="${badgeIcon}" style="width: 13px; height: 13px;"></i>
+              ${intent === "CHATTER" ? "CHATTER / FILTERED" : `${action} ${msg.symbol || ''}`}
+            </span>
+            ${msg.symbol && !isChatter ? `<span class="symbol-badge">${msg.symbol}</span>` : ''}
+          </div>
+          <div style="font-size: 0.75rem; font-weight: 700; color: ${confidence > 80 ? '#34d399' : '#fbbf24'};">
+            ${confidence}% Confidence
+          </div>
+        </div>
+
+        ${!isChatter ? `
+          <div class="params-grid">
+            <div class="param-item">
+              <div class="param-title">Order Type</div>
+              <div class="param-value">${msg.order_type || 'MARKET'}</div>
+            </div>
+            <div class="param-item">
+              <div class="param-title">Entry Price</div>
+              <div class="param-value ${isBuy ? 'green' : 'red'}">${msg.entry_price || 'CMP'}</div>
+            </div>
+            <div class="param-item">
+              <div class="param-title">Stop Loss (SL)</div>
+              <div class="param-value red">${msg.sl || 'Open / BE'}</div>
+            </div>
+            <div class="param-item">
+              <div class="param-title">Take Profit (TP)</div>
+              <div class="param-value green" title="${escapeHtml(tpDisplay)}">${tpDisplay}</div>
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="reasoning-text">
+          <span style="font-weight: 600; color: #94a3b8;">AI Intent:</span> ${escapeHtml(msg.reasoning || "Analyzed intent.")}
+        </div>
+
+        <div class="meta-footer">
+          <div>
+            <i data-lucide="cpu" style="width: 12px; height: 12px; display: inline-block; vertical-align: middle;"></i>
+            ${escapeHtml(msg.model_used || "Smart Engine")} &bull; ${msg.processing_time_ms || 12}ms
+          </div>
+          <button class="btn btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.68rem;" onclick="inspectJson('${safeJsonData}')">
+            <i data-lucide="code" style="width: 12px; height: 12px;"></i> Inspect Raw JSON
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Handle Incoming Live Message via WebSocket
+function handleIncomingMessage(data) {
+  messagesCache.unshift(data);
+  appendLog(
+    data.intent === "CHATTER" ? "INFO" : "SIGNAL",
+    "STREAM",
+    `[${data.intent}] ${data.action || ''} ${data.symbol || ''} - "${(data.text || '').substring(0, 45)}..."`
+  );
+
+  // Re-render feed if matches current filter
+  if (currentFilter === "ALL" ||
+    (currentFilter === "TRADES" && data.is_trade === 1) ||
+    (currentFilter === "CHATTER" && data.intent === "CHATTER") ||
+    (currentFilter === data.intent)) {
+    renderFeed(messagesCache);
+  }
+
+  loadStats();
+  loadTrades();
+}
+
+// Filters & Search
+function setFilter(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll(".filter-tab").forEach(t => t.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  loadMessages();
+}
+
+function debounceSearch() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    currentSearch = document.getElementById("feed-search").value.trim();
+    loadMessages();
+  }, 300);
+}
+
+// Tab Switching
+function switchRightTab(tabId, btn) {
+  document.querySelectorAll(".tab-nav-btn").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  else {
+    const tabBtns = document.querySelectorAll(".tab-nav-btn");
+    if (tabId === "simulator" && tabBtns[0]) tabBtns[0].classList.add("active");
+    if (tabId === "watchlist" && tabBtns[1]) tabBtns[1].classList.add("active");
+    if (tabId === "terminal" && tabBtns[2]) tabBtns[2].classList.add("active");
+  }
+
+  document.getElementById("tab-simulator").style.display = tabId === "simulator" ? "block" : "none";
+  document.getElementById("tab-watchlist").style.display = tabId === "watchlist" ? "block" : "none";
+  document.getElementById("tab-terminal").style.display = tabId === "terminal" ? "block" : "none";
+
+  if (tabId === "watchlist") {
+    loadTrades();
+  }
+}
+
+// Preset Prompts for instant testing of the 6 outcomes
+function applyPreset(key) {
+  const presets = {
+    pending_setup: "BE READY ON THIS LEVEL 4052.90 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 4049.93 TP 4070.21",
+    level_tapped: "LEVEL TAPED",
+    negation_wait: "active mat krna abhi",
+    early_active: "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
+    partial_1to1: "1:1 DONE You can book partial profit here 🚀 safe traders can book",
+    risk_free: "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
+    full_tp: "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
+    sl_hit: "SL HIT on gold trade. Respect risk management, closed.",
+    level_not_tapped: "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
+    weekend_chatter: "ye crazyy hogya guyss enjoy your weekend, 5/5 trades smashed! party hard!",
+    gold_buy: "BUY GOLD NOW 2642.50 SL 2636.00 TP1 2648.00 TP2 2656.00",
+    btc_short: "BTC SHORT NOW 91250 SL 91900 TP1 90400 TP2 89500"
+  };
+
+  const text = presets[key];
+  if (text) {
+    document.getElementById("sim-text").value = text;
+    document.getElementById("sim-text").focus();
+  }
+}
+
+// Drag and Drop & File Selection
+function setupDragAndDrop() {
+  const dropzone = document.getElementById("dropzone");
+  if (!dropzone) return;
+
+  ["dragenter", "dragover"].forEach(event => {
+    dropzone.addEventListener(event, (e) => {
+      e.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+  });
+
+  ["dragleave", "drop"].forEach(event => {
+    dropzone.addEventListener(event, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+    });
+  });
+
+  dropzone.addEventListener("drop", (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  });
+}
+
+function handleFileSelected(input) {
+  if (input.files && input.files.length > 0) {
+    handleFile(input.files[0]);
+  }
+}
+
+function handleFile(file) {
+  selectedFile = file;
+  document.getElementById("file-name-text").innerText = file.name;
+  document.getElementById("file-preview-badge").style.display = "inline-flex";
+}
+
+function clearFileSelected(e) {
+  if (e) e.stopPropagation();
+  selectedFile = null;
+  document.getElementById("sim-file").value = "";
+  document.getElementById("file-preview-badge").style.display = "none";
+}
+
+// Submit Simulation
+async function submitSimulation(e) {
+  e.preventDefault();
+  const text = document.getElementById("sim-text").value.trim();
+  const sender = document.getElementById("sim-sender").value.trim() || "Channel Owner";
+  const channel = document.getElementById("sim-channel").value.trim() || "VIP Signals";
+  const submitBtn = document.getElementById("sim-submit-btn");
+
+  if (!text && !selectedFile) {
+    showToast("Please enter message text or attach a chart screenshot.", "error");
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = `<i data-lucide="loader" class="animate-spin" style="width: 16px; height: 16px;"></i> Analyzing Intent with AI...`;
+  initIcons();
+
+  const formData = new FormData();
+  formData.append("text", text);
+  formData.append("sender", sender);
+  formData.append("channel_title", channel);
+  if (selectedFile) {
+    formData.append("image", selectedFile);
+  }
+
+  try {
+    const res = await fetch("/api/simulate", {
+      method: "POST",
+      body: formData
+    });
+    const result = await res.json();
+
+    // Clear inputs
+    document.getElementById("sim-text").value = "";
+    clearFileSelected();
+    showToast("Signal simulated & parsed successfully!", "success");
+
+    // Switch to feed view
+    const cardEl = document.getElementById(`msg-card-${result.result.message_id}`);
+    if (cardEl) {
+      cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  } catch (err) {
+    showToast(`Simulation failed: ${err.message}`, "error");
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = `<i data-lucide="send" style="width: 16px; height: 16px;"></i> Send & Interpret Intent Instantly`;
+    initIcons();
+  }
+}
+
+// --- Trade Lifecycle & Outcomes Watchlist Manager ---
+let currentTradeFilter = "ALL";
+let tradesCache = [];
+
+async function loadTrades() {
+  const container = document.getElementById("watchlist-container");
+  if (!container) return;
+
+  try {
+    let url = "/api/trades?limit=60";
+    if (currentTradeFilter && currentTradeFilter !== "ALL") {
+      url += `&status_filter=${encodeURIComponent(currentTradeFilter)}`;
+    }
+    const res = await fetch(url);
+    const data = await res.json();
+    tradesCache = data.trades || [];
+    renderTrades(tradesCache);
+  } catch (err) {
+    console.error("Failed to load trades:", err);
+  }
+}
+
+function setTradeFilter(filter, btn) {
+  currentTradeFilter = filter;
+  if (btn && btn.parentElement) {
+    btn.parentElement.querySelectorAll(".chip-btn").forEach(el => el.classList.remove("active"));
+    btn.classList.add("active");
+  }
+  loadTrades();
+}
+
+function filterToTrade(tradeId) {
+  setTimeout(() => {
+    const card = document.getElementById(`trade-card-${tradeId}`);
+    if (card) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.style.borderColor = "#3b82f6";
+      card.style.boxShadow = "0 0 15px rgba(59, 130, 246, 0.5)";
+      setTimeout(() => {
+        card.style.borderColor = "";
+        card.style.boxShadow = "";
+      }, 2500);
+    }
+  }, 300);
+}
+
+function updateWatchlist(messages) {
+  loadTrades();
+}
+
+function renderTrades(trades) {
+  const container = document.getElementById("watchlist-container");
+  if (!container) return;
+
+  if (!trades || trades.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-dim); padding: 2.5rem 1rem;">
+        <i data-lucide="shield-check" style="width: 36px; height: 36px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+        <p>No trades matching filter (${currentTradeFilter}).</p>
+        <p style="font-size: 0.72rem; margin-top: 0.3rem;">Simulate a trade setup or receive a Telegram broadcast to track lifecycle states.</p>
+      </div>
+    `;
+    initIcons();
+    return;
+  }
+
+  container.innerHTML = trades.map(t => {
+    const isBuy = (t.action || "").includes("BUY") || (t.action || "") === "LONG";
+    const status = t.status || "ACTIVE";
+    const badgeCls = getOutcomeBadgeClass(status);
+    let tpDisplay = "N/A";
+    if (Array.isArray(t.tp_levels) && t.tp_levels.length > 0) {
+      tpDisplay = t.tp_levels.join(" | ");
+    }
+
+    return `
+      <div class="trade-tracker-card" id="trade-card-${t.trade_id}">
+        <div class="trade-card-top">
+          <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="trade-id-pill" title="Unique Trade Identifier">
+                <i data-lucide="tag" style="width: 11px; height: 11px;"></i> #${t.trade_id}
+              </span>
+              <span class="trade-card-symbol">
+                <span style="color: ${isBuy ? '#34d399' : '#f87171'};">${t.action || 'BUY'}</span>
+                <span>${t.symbol || 'XAUUSD'}</span>
+              </span>
+              <span class="source-pill">${t.order_type || 'MARKET'}</span>
+            </div>
+            <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.35rem;">
+              Started: ${t.created_at ? new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today'}
+              ${t.updated_at && t.updated_at !== t.created_at ? `&bull; Updated: ${new Date(t.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </div>
+          </div>
+          <div style="text-align: right;">
+            <span class="outcome-badge ${badgeCls}">
+              ${escapeHtml(t.outcome || t.status)}
+            </span>
+          </div>
+        </div>
+
+        <!-- Prices Row -->
+        <div class="params-grid" style="margin-bottom: 0.5rem;">
+          <div class="param-item">
+            <div class="param-title">Entry</div>
+            <div class="param-value ${isBuy ? 'green' : 'red'}">${t.entry_price || 'CMP'}</div>
+          </div>
+          <div class="param-item">
+            <div class="param-title">Stop Loss (SL)</div>
+            <div class="param-value red">${t.sl || 'Open / BE'}</div>
+          </div>
+          <div class="param-item">
+            <div class="param-title">Take Profit (TP)</div>
+            <div class="param-value green" title="${escapeHtml(tpDisplay)}">${tpDisplay}</div>
+          </div>
+          <div class="param-item">
+            <div class="param-title">Risk:Reward</div>
+            <div class="param-value" style="color: #60a5fa;">${t.risk_reward || '1:2+'}</div>
+          </div>
+        </div>
+
+        ${t.pnl_notes ? `
+          <div style="font-size: 0.72rem; padding: 0.35rem 0.6rem; border-radius: 5px; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; ${t.pnl_notes.includes('SAFETY SHIELD') ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;' : t.pnl_notes.includes('XM #') ? 'background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #6ee7b7;' : 'background: rgba(0,0,0,0.25); color: var(--text-muted);'}">
+            <i data-lucide="${t.pnl_notes.includes('SAFETY SHIELD') ? 'shield-alert' : t.pnl_notes.includes('XM #') ? 'zap' : 'info'}" style="width: 13px; height: 13px; flex-shrink: 0;"></i>
+            <span>${escapeHtml(t.pnl_notes)}</span>
+          </div>
+        ` : ''}
+
+        <!-- Actions & Timeline Row -->
+        <div class="trade-card-actions">
+          <button class="btn btn-sm btn-secondary" onclick="toggleTimeline('${t.trade_id}')" style="padding: 0.25rem 0.6rem; font-size: 0.7rem;">
+            <i data-lucide="history" style="width: 12px; height: 12px;"></i>
+            Timeline (${t.event_count || 1})
+          </button>
+
+          <div style="margin-left: auto; display: flex; align-items: center; gap: 0.35rem;">
+            <span style="font-size: 0.68rem; color: var(--text-dim);">Set Outcome:</span>
+            <select class="outcome-select" onchange="updateTradeStatusManual('${t.trade_id}', this.value)">
+              <option value="" disabled selected>-- Select Outcome --</option>
+              <option value="PARTIAL_1_TO_1" ${t.status === 'PARTIAL_1_TO_1' ? 'selected' : ''}>🎯 4. 1:1 Given (Partial Booked)</option>
+              <option value="BREAK_EVEN" ${t.status === 'BREAK_EVEN' ? 'selected' : ''}>🛡️ 3. Break Even (Risk Free)</option>
+              <option value="TP_HIT" ${t.status === 'TP_HIT' ? 'selected' : ''}>🏆 2. Full TP Hit</option>
+              <option value="SL_HIT" ${t.status === 'SL_HIT' ? 'selected' : ''}>🛑 1. SL Hit</option>
+              <option value="MISSED_NOT_TAPPED" ${t.status === 'MISSED_NOT_TAPPED' ? 'selected' : ''}>❌ 5. Level Not Tapped</option>
+              <option value="EARLY_EXECUTION" ${t.status === 'EARLY_EXECUTION' ? 'selected' : ''}>⚡ 6. Early Exec (Active sign)</option>
+              <option value="ACTIVE" ${t.status === 'ACTIVE' ? 'selected' : ''}>🔵 Active & Running</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Hidden Timeline Container -->
+        <div id="timeline-${t.trade_id}" class="trade-timeline-container" style="display: none;">
+          <div style="text-align: center; color: var(--text-dim); padding: 0.5rem;">Loading trade lifecycle audit...</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  initIcons();
+}
+
+async function toggleTimeline(tradeId) {
+  const container = document.getElementById(`timeline-${tradeId}`);
+  if (!container) return;
+
+  if (container.style.display === "block") {
+    container.style.display = "none";
+    return;
+  }
+
+  container.style.display = "block";
+  try {
+    const res = await fetch(`/api/trades/${encodeURIComponent(tradeId)}`);
+    const data = await res.json();
+    const events = data.events || [];
+
+    if (events.length === 0) {
+      container.innerHTML = `<div style="color: var(--text-dim);">No logged events yet.</div>`;
+      return;
+    }
+
+    container.innerHTML = `
+      <div style="font-weight: 700; color: #94a3b8; margin-bottom: 0.5rem; font-size: 0.72rem;">
+        Lifecycle Audit Trail (${events.length} events)
+      </div>
+      ${events.map(ev => `
+        <div class="trade-timeline-step">
+          <div class="timeline-dot"></div>
+          <div>
+            <div style="display: flex; gap: 0.4rem; align-items: center;">
+              <span class="outcome-badge ${getOutcomeBadgeClass(ev.new_status)}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem;">
+                ${escapeHtml(ev.new_status)}
+              </span>
+              <span style="color: var(--text-dim); font-size: 0.65rem;">
+                ${ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : ''}
+              </span>
+            </div>
+            <div style="margin-top: 0.2rem; color: #e2e8f0; font-size: 0.72rem;">
+              ${escapeHtml(ev.notes || '')}
+            </div>
+            ${ev.text ? `
+              <div style="font-style: italic; color: var(--text-muted); font-size: 0.68rem; margin-top: 0.15rem;">
+                Telegram: "${escapeHtml(ev.text)}"
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `).join("")}
+    `;
+  } catch (err) {
+    container.innerHTML = `<div style="color: #ef4444;">Failed to load events: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function updateTradeStatusManual(tradeId, newStatus) {
+  if (!newStatus) return;
+  try {
+    const res = await fetch(`/api/trades/${encodeURIComponent(tradeId)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: newStatus,
+        notes: `Manual operator outcome update to ${newStatus}`
+      })
+    });
+    if (res.ok) {
+      showToast(`Outcome updated to ${newStatus}`, "success");
+      loadTrades();
+      loadMessages();
+      loadStats();
+    } else {
+      const err = await res.json();
+      showToast("Error: " + (err.detail || "Failed to update outcome"), "error");
+    }
+  } catch (e) {
+    showToast("Request failed: " + e.message, "error");
+  }
+}
+
+// Terminal logs
+async function loadLogs() {
+  try {
+    const res = await fetch("/api/logs?limit=40");
+    const data = await res.json();
+    const terminal = document.getElementById("terminal-logs");
+    if (!terminal) return;
+
+    terminal.innerHTML = (data.logs || []).reverse().map(l => `
+      <div class="log-entry">
+        <span class="log-time">[${new Date(l.created_at).toLocaleTimeString()}]</span>
+        <span class="log-level-${l.level}">[${l.level}]</span>
+        <span class="log-msg">${escapeHtml(l.message)}</span>
+      </div>
+    `).join("");
+    terminal.scrollTop = terminal.scrollHeight;
+  } catch (e) {
+    console.error("Failed to load logs", e);
+  }
+}
+
+function appendLog(level, category, message) {
+  const terminal = document.getElementById("terminal-logs");
+  if (!terminal) return;
+
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML = `
+    <span class="log-time">[${new Date().toLocaleTimeString()}]</span>
+    <span class="log-level-${level}">[${level}]</span>
+    <span class="log-msg">${escapeHtml(message)}</span>
+  `;
+  terminal.appendChild(entry);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+// Settings Modal
+async function openSettingsModal() {
+  try {
+    const res = await fetch("/api/settings");
+    const cfg = await res.json();
+
+    document.getElementById("setting-provider").value = cfg.AI_PROVIDER || "groq";
+    toggleProviderFields();
+
+    document.getElementById("setting-groq-model").value = cfg.GROQ_TEXT_MODEL || "llama-3.3-70b-versatile";
+    document.getElementById("setting-groq-vision-model").value = cfg.GROQ_VISION_MODEL || "llama-3.2-11b-vision-preview";
+    if (cfg.HAS_GROQ_KEY) {
+      document.getElementById("setting-groq-key").placeholder = `Stored (${cfg.GROQ_API_KEY_MASKED})`;
+    }
+
+    document.getElementById("setting-gemini-model").value = cfg.GEMINI_MODEL || "gemini-1.5-flash";
+    if (cfg.HAS_GEMINI_KEY) {
+      document.getElementById("setting-gemini-key").placeholder = `Stored (${cfg.GEMINI_API_KEY_MASKED})`;
+    }
+
+    if (cfg.HAS_BOT_TOKEN) {
+      document.getElementById("setting-bot-token").placeholder = `Stored (${cfg.TELEGRAM_BOT_TOKEN_MASKED})`;
+    }
+    document.getElementById("setting-channel-id").value = cfg.TELEGRAM_CHANNEL_ID || "";
+
+    // XM MT5 settings
+    document.getElementById("setting-xm-login").value = cfg.XM_MT5_LOGIN || "";
+    document.getElementById("setting-xm-server").value = cfg.XM_MT5_SERVER || "XMGlobal-MT5-Demo";
+    document.getElementById("setting-xm-auto").checked = (cfg.XM_AUTO_EXECUTION !== "false");
+
+    const apiUrlEl = document.getElementById("setting-api-url");
+    if (apiUrlEl) {
+      apiUrlEl.value = localStorage.getItem("API_BACKEND_URL") || "";
+    }
+
+    document.getElementById("settings-modal").style.display = "flex";
+  } catch (e) {
+    showToast("Failed to load settings: " + e.message, "error");
+  }
+}
+
+function closeSettingsModal() {
+  document.getElementById("settings-modal").style.display = "none";
+}
+
+function toggleProviderFields() {
+  const prov = document.getElementById("setting-provider").value;
+  document.getElementById("groq-fields").style.display = prov === "groq" ? "block" : "none";
+  document.getElementById("gemini-fields").style.display = prov === "gemini" ? "block" : "none";
+}
+
+async function saveSettings() {
+  const payload = {
+    AI_PROVIDER: document.getElementById("setting-provider").value,
+    GROQ_TEXT_MODEL: document.getElementById("setting-groq-model").value,
+    GROQ_VISION_MODEL: document.getElementById("setting-groq-vision-model").value,
+    GEMINI_MODEL: document.getElementById("setting-gemini-model").value,
+    TELEGRAM_CHANNEL_ID: document.getElementById("setting-channel-id").value.trim()
+  };
+
+  const groqKey = document.getElementById("setting-groq-key").value.trim();
+  if (groqKey) payload.GROQ_API_KEY = groqKey;
+
+  const geminiKey = document.getElementById("setting-gemini-key").value.trim();
+  if (geminiKey) payload.GEMINI_API_KEY = geminiKey;
+
+  const botToken = document.getElementById("setting-bot-token").value.trim();
+  if (botToken) payload.TELEGRAM_BOT_TOKEN = botToken;
+
+  // XM MT5 fields
+  const xmAuto = document.getElementById("setting-xm-auto").checked;
+  const xmLogin = document.getElementById("setting-xm-login").value.trim();
+  const xmServer = document.getElementById("setting-xm-server").value.trim();
+  const xmPass = document.getElementById("setting-xm-password").value.trim();
+
+  payload.XM_AUTO_EXECUTION = xmAuto ? "true" : "false";
+  if (xmLogin) payload.XM_MT5_LOGIN = xmLogin;
+  if (xmServer) payload.XM_MT5_SERVER = xmServer;
+  if (xmPass) payload.XM_MT5_PASSWORD = xmPass;
+
+  const apiUrlEl = document.getElementById("setting-api-url");
+  if (apiUrlEl) {
+    const val = apiUrlEl.value.trim();
+    if (val) {
+      localStorage.setItem("API_BACKEND_URL", val);
+    } else {
+      localStorage.removeItem("API_BACKEND_URL");
+    }
+  }
+
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      showToast("Settings and XM MT5 configuration saved successfully!", "success");
+      closeSettingsModal();
+      loadSystemStatus();
+    }
+  } catch (e) {
+    showToast("Failed to save settings: " + e.message, "error");
+  }
+}
+
+async function startClientListener() {
+  try {
+    const chanInput = document.getElementById("setting-userbot-channel");
+    const chanVal = chanInput ? chanInput.value.trim() : "";
+    let url = "/api/telegram/start_client";
+    if (chanVal) {
+      url += `?channel=${encodeURIComponent(chanVal)}`;
+    }
+    const res = await fetch(url, { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`Live listener started for '${chanVal || "ALPHA PREMIUM"}'!`, "success");
+      closeSettingsModal();
+      loadSystemStatus();
+    } else {
+      showToast(`Error starting listener: ${data.detail || 'Failed to start.'}`, "error");
+    }
+  } catch (e) {
+    showToast("Failed to start listener: " + e.message, "error");
+  }
+}
+
+async function startTelegramBot() {
+  try {
+    const res = await fetch("/api/telegram/start", { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      showToast("Telegram listener started successfully!", "success");
+      loadSystemStatus();
+    } else {
+      showToast(`Error starting listener: ${data.detail || 'Check bot token.'}`, "error");
+    }
+  } catch (e) {
+    showToast("Failed to start listener: " + e.message, "error");
+  }
+}
+
+async function stopTelegramBot() {
+  try {
+    await fetch("/api/telegram/stop", { method: "POST" });
+    showToast("Telegram listener stopped.", "info");
+    loadSystemStatus();
+  } catch (e) {
+    showToast("Failed to stop listener: " + e.message, "error");
+  }
+}
+
+// Wipe / Clear Data
+async function confirmClearData() {
+  if (confirm("Are you sure you want to clear all message logs and signal history?")) {
+    try {
+      await fetch("/api/clear", { method: "POST" });
+      messagesCache = [];
+      renderFeed([]);
+      loadStats();
+      loadLogs();
+      showToast("All message logs and signal history wiped clean.", "info");
+    } catch (e) {
+      showToast("Failed to clear data: " + e.message, "error");
+    }
+  }
+}
+
+// JSON Inspector Modal
+function inspectJson(encodedData) {
+  const data = JSON.parse(decodeURIComponent(encodedData));
+  document.getElementById("json-viewer").innerText = JSON.stringify(data, null, 2);
+  document.getElementById("json-modal").style.display = "flex";
+}
+
+function closeJsonModal() {
+  document.getElementById("json-modal").style.display = "none";
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/[&<>"']/g, function (m) {
+    return {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    }[m];
+  });
+}

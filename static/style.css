@@ -1,0 +1,1513 @@
+/* ============================================================
+   AlphaSignal AI — Enhanced Dashboard Theme
+   Inspired by ReactBits.dev (Aurora, Counter, Spotlight Card,
+   Electric Border, Gradient Text, Split Text, Sparkles, etc.)
+   ============================================================ */
+
+:root {
+  --bg-primary: #0a0e17;
+  --bg-secondary: #111827;
+  --bg-card: #161f30;
+  --bg-card-hover: #1c273c;
+  --border-color: #243048;
+  --border-bright: #3b82f6;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --accent-green: #10b981;
+  --accent-green-glow: rgba(16, 185, 129, 0.2);
+  --accent-red: #ef4444;
+  --accent-red-glow: rgba(239, 68, 68, 0.2);
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-amber: #f59e0b;
+  --glow-blue: rgba(59, 130, 246, 0.35);
+  --glow-purple: rgba(139, 92, 246, 0.3);
+  --glow-green: rgba(16, 185, 129, 0.3);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ============================================================
+   [ReactBits: Aurora Background] — Animated aurora gradient
+   ============================================================ */
+body::before {
+  content: "";
+  position: fixed;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: 
+    radial-gradient(ellipse at 20% 50%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
+  animation: auroraShift 20s ease-in-out infinite alternate;
+  z-index: 0;
+  pointer-events: none;
+}
+
+@keyframes auroraShift {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(2%, -3%) rotate(1deg); }
+  66% { transform: translate(-1%, 2%) rotate(-0.5deg); }
+  100% { transform: translate(1%, -1%) rotate(0.5deg); }
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* ============================================================
+   [ReactBits: Gradient Text] — Header with animated gradient
+   ============================================================ */
+.app-header {
+  background: rgba(17, 24, 39, 0.75);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+  padding: 0.85rem 1.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Subtle top-edge glow line inspired by ReactBits Electric Border */
+.app-header::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(59, 130, 246, 0.6) 20%,
+    rgba(139, 92, 246, 0.6) 50%,
+    rgba(16, 185, 129, 0.6) 80%,
+    transparent 100%
+  );
+  animation: electricBorderFlow 4s linear infinite;
+  background-size: 200% 100%;
+}
+
+@keyframes electricBorderFlow {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 0%; }
+}
+
+.brand-area {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+/* [ReactBits: Magnet / Tilt] — Logo with hover tilt and glow */
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #2563eb, #8b5cf6, #10b981);
+  background-size: 200% 200%;
+  animation: logoGradient 4s ease infinite;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: #fff;
+  font-size: 1.2rem;
+  box-shadow: 0 0 20px rgba(37, 99, 235, 0.4), 0 0 40px rgba(139, 92, 246, 0.15);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease;
+}
+
+.brand-logo:hover {
+  transform: scale(1.1) rotate(-5deg);
+  box-shadow: 0 0 30px rgba(37, 99, 235, 0.6), 0 0 60px rgba(139, 92, 246, 0.3);
+}
+
+@keyframes logoGradient {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* [ReactBits: Gradient Text] — Animated shimmering title */
+.brand-title {
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  background: linear-gradient(90deg, #ffffff, #60a5fa, #c084fc, #34d399, #ffffff);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmerText 6s linear infinite;
+}
+
+@keyframes shimmerText {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+.brand-tagline {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================
+   Status Indicators — Enhanced with micro-interaction pulses
+   ============================================================ */
+.header-status-group {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(8px);
+  transition: all 0.3s ease;
+}
+
+.status-badge:hover {
+  background: rgba(30, 41, 59, 0.9);
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-1px);
+}
+
+/* [ReactBits: Sparkle-style pulse] */
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green), 0 0 16px var(--accent-green-glow);
+  animation: sparkPulse 2s ease-in-out infinite;
+  position: relative;
+}
+
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-green);
+  opacity: 0;
+  animation: sparkRing 2s ease-out infinite;
+}
+
+.pulse-dot.idle {
+  background-color: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber);
+}
+.pulse-dot.idle::after {
+  border-color: var(--accent-amber);
+}
+
+.pulse-dot.error {
+  background-color: var(--accent-red);
+  box-shadow: 0 0 8px var(--accent-red);
+}
+.pulse-dot.error::after {
+  border-color: var(--accent-red);
+}
+
+@keyframes sparkPulse {
+  0%, 100% { transform: scale(0.9); opacity: 0.85; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+
+@keyframes sparkRing {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+/* ============================================================
+   [ReactBits: Spotlight Card / Tilt Card] — Buttons with hover glow
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.825rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Shimmer sweep on hover - ReactBits inspired */
+.btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+  transition: left 0.5s ease;
+}
+
+.btn:hover::before {
+  left: 100%;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #2563eb, #6366f1);
+  color: white;
+  box-shadow: 0 2px 15px rgba(37, 99, 235, 0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #1d4ed8, #4f46e5);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: rgba(22, 31, 48, 0.8);
+  color: var(--text-main);
+  border-color: var(--border-color);
+  backdrop-filter: blur(4px);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-1px);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+  transform: translateY(-1px);
+}
+
+/* ============================================================
+   [ReactBits: Counter + Spotlight Card] — KPI Stats with glow
+   ============================================================ */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  padding: 1.25rem 1.75rem 0.75rem;
+}
+
+.stat-card {
+  background: rgba(22, 31, 48, 0.7);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 1.1rem 1.35rem;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  backdrop-filter: blur(8px);
+}
+
+/* [ReactBits: Spotlight Card] — Mouse-following spotlight effect via CSS */
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 14px;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  background: radial-gradient(circle 120px at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,0.06), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.stat-card:hover::before {
+  opacity: 1;
+}
+
+.stat-card:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3), 0 0 20px var(--card-glow, rgba(59, 130, 246, 0.1));
+}
+
+.stat-card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  z-index: 2;
+}
+
+.stat-card.trades {
+  --card-glow: var(--glow-green);
+}
+.stat-card.trades::after { background: linear-gradient(180deg, var(--accent-green), rgba(16, 185, 129, 0.3)); }
+
+.stat-card.chatter {
+  --card-glow: var(--glow-purple);
+}
+.stat-card.chatter::after { background: linear-gradient(180deg, var(--accent-purple), rgba(139, 92, 246, 0.3)); }
+
+.stat-card.latency {
+  --card-glow: var(--glow-blue);
+}
+.stat-card.latency::after { background: linear-gradient(180deg, var(--accent-blue), rgba(59, 130, 246, 0.3)); }
+
+.stat-card.total::after { background: linear-gradient(180deg, var(--accent-amber), rgba(245, 158, 11, 0.3)); }
+
+.stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+/* [ReactBits: Counter] — Animated number styling */
+.stat-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  line-height: 1.2;
+}
+
+/* Pop animation class added by JS during value update */
+.stat-value.counter-pop {
+  animation: counterPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes counterPop {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.stat-sub {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 0.3rem;
+}
+
+/* ============================================================
+   Main Dashboard Grid
+   ============================================================ */
+.main-layout {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1.25rem;
+  padding: 1rem 1.75rem 2rem;
+  height: calc(100vh - 180px);
+}
+
+@media (max-width: 1024px) {
+  .main-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+}
+
+/* ============================================================
+   [ReactBits: Electric Border] — Panels with animated borders
+   ============================================================ */
+.panel-container {
+  background: rgba(22, 31, 48, 0.65);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+  position: relative;
+  transition: border-color 0.3s ease;
+}
+
+.panel-container:hover {
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+/* Electric border glow on focus-within */
+.panel-container:focus-within {
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.1);
+}
+
+.panel-header {
+  padding: 0.85rem 1.25rem;
+  background: rgba(17, 24, 39, 0.5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Feed Filters — [ReactBits: Dock-style tab bar] */
+.filter-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: rgba(10, 14, 23, 0.7);
+  padding: 0.25rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.filter-tab {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.filter-tab:hover {
+  color: var(--text-main);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* [ReactBits: Animated Content] — Active tab with smooth slide */
+.filter-tab.active {
+  background: var(--accent-blue);
+  color: white;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  transform: scale(1.02);
+}
+
+/* ============================================================
+   Message Feed — [ReactBits: Animated Content / Fade Content]
+   ============================================================ */
+.feed-stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* ============================================================
+   [ReactBits: Spotlight Card] — Signal cards with hover effects
+   ============================================================ */
+.signal-card {
+  background: rgba(22, 31, 48, 0.85);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 1.15rem;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  animation: cardSlideIn 0.4s ease-out both;
+}
+
+@keyframes cardSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.signal-card:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.3), 0 0 15px rgba(59, 130, 246, 0.08);
+  transform: translateY(-2px);
+}
+
+.signal-card.trade-card {
+  border-left: 4px solid var(--accent-green);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(22, 31, 48, 0.9) 100%);
+}
+
+.signal-card.trade-card:hover {
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.3), 0 0 20px rgba(16, 185, 129, 0.1);
+}
+
+.signal-card.sell-card {
+  border-left: 4px solid var(--accent-red);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.06) 0%, rgba(22, 31, 48, 0.9) 100%);
+}
+
+.signal-card.sell-card:hover {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.3), 0 0 20px rgba(239, 68, 68, 0.1);
+}
+
+.signal-card.update-card {
+  border-left: 4px solid var(--accent-purple);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.06) 0%, rgba(22, 31, 48, 0.9) 100%);
+}
+
+.signal-card.update-card:hover {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.3), 0 0 20px rgba(139, 92, 246, 0.1);
+}
+
+.signal-card.chatter-card {
+  border-left: 4px solid var(--text-dim);
+  opacity: 0.85;
+}
+
+.signal-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.sender-tag {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+/* [ReactBits: Glitch Text] — Source pill with micro-animation */
+.source-pill {
+  padding: 0.18rem 0.5rem;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.1));
+  color: #93c5fd;
+  border-radius: 5px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  transition: all 0.2s ease;
+}
+
+.source-pill:hover {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2));
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+/* Original Telegram Box */
+.raw-message-box {
+  background: rgba(10, 14, 23, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  transition: border-color 0.3s ease;
+}
+
+.raw-message-box:hover {
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.raw-image-thumb {
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  margin-top: 0.5rem;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  object-fit: cover;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.raw-image-thumb:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+
+/* AI Interpretation Box — Enhanced with subtle gradient border */
+.ai-box {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 12px;
+  padding: 0.85rem;
+  position: relative;
+}
+
+.ai-box::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), transparent, rgba(139, 92, 246, 0.1));
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.signal-card:hover .ai-box::before {
+  opacity: 1;
+}
+
+.ai-box-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+/* [ReactBits: Split Text] — Intent badges with entrance animation */
+.intent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 0.28rem 0.7rem;
+  border-radius: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  transition: all 0.2s ease;
+}
+
+.intent-badge.buy {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
+}
+
+.intent-badge.sell {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.1);
+}
+
+.intent-badge.update {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.1);
+}
+
+.intent-badge.chatter {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.35);
+}
+
+.symbol-badge {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: 0.05em;
+}
+
+/* Trade Parameters Grid — Enhanced glass effect */
+.params-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.param-item {
+  background: rgba(10, 14, 23, 0.5);
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: all 0.25s ease;
+  backdrop-filter: blur(4px);
+}
+
+.param-item:hover {
+  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(10, 14, 23, 0.7);
+  transform: translateY(-1px);
+}
+
+.param-title {
+  font-size: 0.63rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.param-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.param-value.green { color: var(--accent-green); }
+.param-value.red { color: var(--accent-red); }
+
+/* Reasoning text */
+.reasoning-text {
+  font-size: 0.775rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+  margin-top: 0.4rem;
+}
+
+.meta-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* ============================================================
+   Right Tabs — [ReactBits: Dock] style tab navigation
+   ============================================================ */
+.tab-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tab-nav {
+  display: flex;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(17, 24, 39, 0.3);
+  gap: 2px;
+}
+
+.tab-nav-btn {
+  padding: 0.75rem 1.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.tab-nav-btn:hover {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.tab-nav-btn.active {
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+}
+
+.tab-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+
+/* ============================================================
+   Preset Chips — [ReactBits: Magnetic hover effect]
+   ============================================================ */
+.presets-group {
+  margin-bottom: 1rem;
+}
+
+.presets-label {
+  font-size: 0.725rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.chips-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip-btn {
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid var(--border-color);
+  color: #e2e8f0;
+  padding: 0.38rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  backdrop-filter: blur(4px);
+}
+
+.chip-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-2px) scale(1.02);
+}
+
+.chip-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.chip-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--accent-blue);
+  color: white;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+/* ============================================================
+   Simulator Form — Enhanced glass morphism
+   ============================================================ */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.775rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.form-control {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.825rem;
+  color: white;
+  transition: all 0.25s ease;
+  backdrop-filter: blur(4px);
+}
+
+/* [ReactBits: Glow effect on focus] */
+.form-control:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), 0 0 15px rgba(59, 130, 246, 0.1);
+  background: rgba(15, 23, 42, 0.95);
+}
+
+textarea.form-control {
+  min-height: 90px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+/* ============================================================
+   Drag Drop File Zone — [ReactBits: Electric Border on dragover]
+   ============================================================ */
+.dropzone {
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(15, 23, 42, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.dropzone:hover {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.dropzone.dragover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 25px rgba(59, 130, 246, 0.15);
+  animation: dropzoneGlow 1.5s ease-in-out infinite;
+}
+
+@keyframes dropzoneGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.1); }
+  50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.25); }
+}
+
+.dropzone-text {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.image-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  padding: 0.3rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: #93c5fd;
+  margin-top: 0.5rem;
+}
+
+/* ============================================================
+   Terminal — Enhanced with glow effect
+   ============================================================ */
+.terminal-window {
+  background: rgba(8, 12, 20, 0.9);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  height: 100%;
+  overflow-y: auto;
+  color: #a5b4fc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.3);
+}
+
+.log-entry {
+  display: flex;
+  gap: 0.6rem;
+  line-height: 1.4;
+  animation: logFadeIn 0.3s ease-out;
+}
+
+@keyframes logFadeIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.log-time { color: var(--text-dim); }
+.log-level-INFO { color: #60a5fa; }
+.log-level-SIGNAL { color: #34d399; font-weight: bold; text-shadow: 0 0 8px rgba(52, 211, 153, 0.3); }
+.log-level-WARN { color: #fbbf24; }
+.log-level-ERROR { color: #f87171; font-weight: bold; text-shadow: 0 0 8px rgba(248, 113, 113, 0.3); }
+.log-msg { color: #e2e8f0; }
+
+/* ============================================================
+   Modal — Glass morphism with backdrop blur
+   ============================================================ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  animation: modalOverlayIn 0.3s ease-out;
+}
+
+@keyframes modalOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background: rgba(22, 31, 48, 0.95);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 18px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5), 0 0 30px rgba(59, 130, 246, 0.08);
+  backdrop-filter: blur(16px);
+  animation: modalContentIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modalContentIn {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-body {
+  padding: 1.25rem;
+}
+
+.modal-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.25rem;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.close-btn:hover {
+  color: white;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+pre.code-json {
+  background: rgba(8, 12, 20, 0.9);
+  padding: 1rem;
+  border-radius: 10px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+  color: #38bdf8;
+  overflow-x: auto;
+  border: 1px solid rgba(56, 189, 248, 0.1);
+}
+
+/* ============================================================
+   Trade Lifecycle & Outcome Badges
+   ============================================================ */
+
+.trade-id-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 0.7rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.trade-id-pill:hover {
+  background: rgba(59, 130, 246, 0.25);
+  color: #bfdbfe;
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+/* Outcome Badges — Enhanced with subtle glow */
+.outcome-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.22rem 0.6rem;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  transition: all 0.2s ease;
+}
+
+.outcome-badge.badge-1to1 {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.45);
+  color: #c084fc;
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.1);
+}
+
+.outcome-badge.badge-breakeven {
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.45);
+  color: #67e8f9;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.1);
+}
+
+.outcome-badge.badge-tp-hit {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  color: #6ee7b7;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.1);
+}
+
+.outcome-badge.badge-sl-hit {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.1);
+}
+
+.outcome-badge.badge-missed {
+  background: rgba(100, 116, 139, 0.15);
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  color: #cbd5e1;
+}
+
+.outcome-badge.badge-early {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fcd34d;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.1);
+}
+
+.outcome-badge.badge-active {
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.1);
+}
+
+.outcome-badge.badge-pending {
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.45);
+  color: #fde047;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.1);
+}
+
+.outcome-badge.badge-tapped {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #fbbf24;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.15);
+}
+
+/* ============================================================
+   [ReactBits: Tilt Card / Spotlight Card] — Trade tracker cards
+   ============================================================ */
+.trade-tracker-card {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 0.85rem;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  backdrop-filter: blur(8px);
+  animation: cardSlideIn 0.4s ease-out both;
+}
+
+.trade-tracker-card:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.3), 0 0 15px rgba(59, 130, 246, 0.08);
+}
+
+.trade-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.6rem;
+}
+
+.trade-card-symbol {
+  font-size: 0.95rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.trade-card-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.outcome-select {
+  background: rgba(11, 17, 32, 0.9);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.55rem;
+  transition: all 0.2s ease;
+}
+
+.outcome-select:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+  outline: none;
+}
+
+/* Timeline */
+.trade-timeline-container {
+  margin-top: 0.6rem;
+  padding: 0.6rem;
+  background: rgba(8, 12, 20, 0.7);
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.trade-timeline-step {
+  display: flex;
+  gap: 0.6rem;
+  position: relative;
+  padding-bottom: 0.6rem;
+}
+
+.trade-timeline-step:last-child {
+  padding-bottom: 0;
+}
+
+.trade-timeline-step::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.4), rgba(255, 255, 255, 0.05));
+}
+
+.trade-timeline-step:last-child::before {
+  display: none;
+}
+
+.timeline-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #3b82f6;
+  margin-top: 2px;
+  flex-shrink: 0;
+  z-index: 1;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+
+/* ============================================================
+   [ReactBits: Sparkles / Particles] — Floating particle canvas
+   ============================================================ */
+#sparkle-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+/* ============================================================
+   [ReactBits: Animated Content] — Stagger animation delays for cards
+   ============================================================ */
+.signal-card:nth-child(1) { animation-delay: 0s; }
+.signal-card:nth-child(2) { animation-delay: 0.05s; }
+.signal-card:nth-child(3) { animation-delay: 0.1s; }
+.signal-card:nth-child(4) { animation-delay: 0.15s; }
+.signal-card:nth-child(5) { animation-delay: 0.2s; }
+.signal-card:nth-child(6) { animation-delay: 0.25s; }
+.signal-card:nth-child(7) { animation-delay: 0.3s; }
+.signal-card:nth-child(8) { animation-delay: 0.35s; }
+
+.trade-tracker-card:nth-child(1) { animation-delay: 0s; }
+.trade-tracker-card:nth-child(2) { animation-delay: 0.05s; }
+.trade-tracker-card:nth-child(3) { animation-delay: 0.1s; }
+.trade-tracker-card:nth-child(4) { animation-delay: 0.15s; }
+.trade-tracker-card:nth-child(5) { animation-delay: 0.2s; }
+
+/* ============================================================
+   Custom Toast / Notification — [ReactBits style]
+   ============================================================ */
+.toast-notification {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 200;
+  background: rgba(22, 31, 48, 0.95);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 12px;
+  padding: 0.8rem 1.2rem;
+  color: var(--text-main);
+  font-size: 0.82rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(59, 130, 246, 0.15);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  animation: toastSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), toastFadeOut 0.3s ease 4s forwards;
+  max-width: 380px;
+}
+
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateX(30px) scale(0.95); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes toastFadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(10px); pointer-events: none; }
+}
+
+.toast-notification.toast-success {
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+.toast-notification.toast-error {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+/* ============================================================
+   Loading Skeleton — [ReactBits style]
+   ============================================================ */
+.skeleton {
+  background: linear-gradient(90deg,
+    rgba(22, 31, 48, 0.8) 0%,
+    rgba(45, 55, 72, 0.6) 50%,
+    rgba(22, 31, 48, 0.8) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-card {
+  height: 140px;
+  border-radius: 12px;
+  margin-bottom: 0.75rem;
+}
+
+.skeleton-text {
+  height: 12px;
+  margin-bottom: 8px;
+  width: 80%;
+}
+
+.skeleton-text.short { width: 50%; }
+.skeleton-text.tiny { width: 30%; }
+
+/* ============================================================
+   Submit button spinner
+   ============================================================ */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   Responsive fine-tuning
+   ============================================================ */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0.65rem 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .header-status-group {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    padding: 1rem;
+  }
+  .params-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
