@@ -1144,11 +1144,6 @@ async function saveSettings() {
     }
   }
 }
-    }
-  } catch (e) {
-    showToast("Failed to save settings: " + e.message, "error");
-  }
-}
 
 async function startClientListener() {
   try {
