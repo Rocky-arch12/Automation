@@ -1,17 +1,33 @@
 // AlphaSignal AI Frontend Application
 
-const API_BASE = localStorage.getItem("API_BACKEND_URL") || "";
-
-function getApiUrl(endpoint) {
-  if (!API_BASE || endpoint.startsWith("http")) return endpoint;
-  const base = API_BASE.replace(/\/$/, "");
-  return endpoint.startsWith("/") ? `${base}${endpoint}` : `${base}/${endpoint}`;
+// Check query param for backend URL convenience: ?backend=https://...
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has("backend")) {
+  const backendParam = urlParams.get("backend").trim().replace(/\/$/, "");
+  if (backendParam) {
+    localStorage.setItem("API_BACKEND_URL", backendParam);
+  }
 }
 
-// Auto-route all /api calls to remote backend if API_BASE is configured (e.g. on Vercel)
+function getApiBase() {
+  return localStorage.getItem("API_BACKEND_URL") || "";
+}
+
+function getApiUrl(endpoint) {
+  const base = getApiBase();
+  if (!base || endpoint.startsWith("http")) return endpoint;
+  const cleanBase = base.replace(/\/$/, "");
+  return endpoint.startsWith("/") ? `${cleanBase}${endpoint}` : `${cleanBase}/${endpoint}`;
+}
+
+// Auto-route all /api and /uploads calls to remote backend if API_BASE is configured (e.g. on Vercel)
 const _origFetch = window.fetch;
 window.fetch = function (url, options) {
   if (typeof url === "string" && (url.startsWith("/api") || url.startsWith("/uploads"))) {
+    // If running on Vercel and backend is not set yet, reject gracefully instead of fetching non-existent Vercel route
+    if (window.location.hostname.includes("vercel.app") && !getApiBase()) {
+      return Promise.reject(new Error("Cloudflare Tunnel URL not configured yet. Open Settings to paste your backend URL."));
+    }
     return _origFetch(getApiUrl(url), options);
   }
   return _origFetch(url, options);
@@ -199,17 +215,27 @@ function initIcons() {
 
 // WebSocket Connection
 function connectWebSocket() {
+  const base = getApiBase();
   let wsUrl;
-  if (API_BASE) {
-    const wsProto = API_BASE.startsWith("https") ? "wss:" : "ws:";
-    const host = API_BASE.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (base) {
+    const wsProto = base.startsWith("https") ? "wss:" : "ws:";
+    const host = base.replace(/^https?:\/\//, "").replace(/\/$/, "");
     wsUrl = `${wsProto}//${host}/ws`;
   } else {
+    if (window.location.hostname.includes("vercel.app")) {
+      updateWsStatus(false, "Live: Connect Tunnel in Settings");
+      return;
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     wsUrl = `${protocol}//${window.location.host}/ws`;
   }
 
-  ws = new WebSocket(wsUrl);
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch (e) {
+    updateWsStatus(false, "Live: Disconnected");
+    return;
+  }
 
   ws.onopen = () => {
     updateWsStatus(true, "Live: Connected");
@@ -963,9 +989,21 @@ function appendLog(level, category, message) {
 
 // Settings Modal
 async function openSettingsModal() {
+  // 1. ALWAYS display the modal immediately so the user can see Section 4 and paste their tunnel URL!
+  const modal = document.getElementById("settings-modal");
+  if (modal) modal.style.display = "flex";
+
+  const apiUrlEl = document.getElementById("setting-api-url");
+  if (apiUrlEl) {
+    apiUrlEl.value = getApiBase();
+  }
+
+  // 2. Safely attempt to fetch server settings from backend
   try {
     const res = await fetch("/api/settings");
+    if (!res.ok) return;
     const cfg = await res.json();
+    if (!cfg || typeof cfg !== "object") return;
 
     document.getElementById("setting-provider").value = cfg.AI_PROVIDER || "groq";
     toggleProviderFields();
@@ -990,15 +1028,8 @@ async function openSettingsModal() {
     document.getElementById("setting-xm-login").value = cfg.XM_MT5_LOGIN || "";
     document.getElementById("setting-xm-server").value = cfg.XM_MT5_SERVER || "XMGlobal-MT5-Demo";
     document.getElementById("setting-xm-auto").checked = (cfg.XM_AUTO_EXECUTION !== "false");
-
-    const apiUrlEl = document.getElementById("setting-api-url");
-    if (apiUrlEl) {
-      apiUrlEl.value = localStorage.getItem("API_BACKEND_URL") || "";
-    }
-
-    document.getElementById("settings-modal").style.display = "flex";
   } catch (e) {
-    showToast("Failed to load settings: " + e.message, "error");
+    console.warn("Could not load remote settings (normal if backend tunnel is not linked yet):", e.message);
   }
 }
 
@@ -1013,6 +1044,17 @@ function toggleProviderFields() {
 }
 
 async function saveSettings() {
+  const apiUrlEl = document.getElementById("setting-api-url");
+  let newApiUrl = "";
+  if (apiUrlEl) {
+    newApiUrl = apiUrlEl.value.trim().replace(/\/$/, "");
+    if (newApiUrl) {
+      localStorage.setItem("API_BACKEND_URL", newApiUrl);
+    } else {
+      localStorage.removeItem("API_BACKEND_URL");
+    }
+  }
+
   const payload = {
     AI_PROVIDER: document.getElementById("setting-provider").value,
     GROQ_TEXT_MODEL: document.getElementById("setting-groq-model").value,
@@ -1041,16 +1083,6 @@ async function saveSettings() {
   if (xmServer) payload.XM_MT5_SERVER = xmServer;
   if (xmPass) payload.XM_MT5_PASSWORD = xmPass;
 
-  const apiUrlEl = document.getElementById("setting-api-url");
-  if (apiUrlEl) {
-    const val = apiUrlEl.value.trim();
-    if (val) {
-      localStorage.setItem("API_BACKEND_URL", val);
-    } else {
-      localStorage.removeItem("API_BACKEND_URL");
-    }
-  }
-
   try {
     const res = await fetch("/api/settings", {
       method: "POST",
@@ -1062,6 +1094,26 @@ async function saveSettings() {
       showToast("Settings and XM MT5 configuration saved successfully!", "success");
       closeSettingsModal();
       loadSystemStatus();
+      if (ws) ws.close();
+      connectWebSocket();
+      loadStats();
+      loadMessages();
+      loadTrades();
+    } else {
+      showToast("Backend Tunnel URL saved! Reconnecting...", "success");
+      closeSettingsModal();
+      setTimeout(() => location.reload(), 800);
+    }
+  } catch (e) {
+    if (newApiUrl) {
+      showToast("Backend Tunnel URL saved! Reconnecting to engine...", "success");
+      closeSettingsModal();
+      setTimeout(() => location.reload(), 800);
+    } else {
+      showToast("Failed to save settings: " + e.message, "error");
+    }
+  }
+}
     }
   } catch (e) {
     showToast("Failed to save settings: " + e.message, "error");
