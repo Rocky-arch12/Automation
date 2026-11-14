@@ -438,6 +438,14 @@ async def toggle_xm_auto_execution(enabled: bool = Query(...)):
 # Serve Frontend static directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.get("/style.css")
+async def serve_style():
+    return FileResponse("static/style.css")
+
+@app.get("/app.js")
+async def serve_app_js():
+    return FileResponse("static/app.js")
+
 @app.get("/")
 async def serve_index():
     return FileResponse("static/index.html")
