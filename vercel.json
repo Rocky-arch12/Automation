@@ -1,11 +1,8 @@
 {
   "version": 2,
-  "public": true,
   "cleanUrls": true,
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/static/$1"
-    }
+  "rewrites": [
+    { "source": "/", "destination": "/static/index.html" },
+    { "source": "/(.*)", "destination": "/static/$1" }
   ]
 }
