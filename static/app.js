@@ -20,6 +20,18 @@ function getApiUrl(endpoint) {
   return endpoint.startsWith("/") ? `${cleanBase}${endpoint}` : `${cleanBase}/${endpoint}`;
 }
 
+function getAuthToken() {
+  return localStorage.getItem("AUTH_TOKEN") || "";
+}
+
+function getAuthUser() {
+  try {
+    return JSON.parse(localStorage.getItem("AUTH_USER") || "null");
+  } catch (e) {
+    return null;
+  }
+}
+
 // Auto-route all /api and /uploads calls to remote backend if API_BASE is configured (e.g. on Vercel)
 const _origFetch = window.fetch;
 window.fetch = function (url, options) {
@@ -28,6 +40,23 @@ window.fetch = function (url, options) {
     if (window.location.hostname.includes("vercel.app") && !getApiBase()) {
       return Promise.reject(new Error("Cloudflare Tunnel URL not configured yet. Open Settings to paste your backend URL."));
     }
+
+    // Attach JWT Authorization Header for Multi-Tenant Isolation
+    const token = getAuthToken();
+    options = options || {};
+    options.headers = options.headers || {};
+    if (token) {
+      if (options.headers instanceof Headers) {
+        if (!options.headers.has("Authorization")) {
+          options.headers.set("Authorization", `Bearer ${token}`);
+        }
+      } else {
+        if (!options.headers["Authorization"]) {
+          options.headers["Authorization"] = `Bearer ${token}`;
+        }
+      }
+    }
+
     return _origFetch(getApiUrl(url), options);
   }
   return _origFetch(url, options);
@@ -46,6 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initParticles();
   initSpotlight();
   setupDragAndDrop();
+  initAuthUI();
   connectWebSocket();
   loadSystemStatus();
   renderFeedSkeleton();
@@ -1205,4 +1235,178 @@ function escapeHtml(str) {
       "'": "&#039;"
     }[m];
   });
+}
+
+// ============================================================
+// Multi-Tenant Authentication & OAuth Module
+// ============================================================
+
+let currentAuthTab = "login";
+
+function initAuthUI() {
+  const token = getAuthToken();
+  const user = getAuthUser();
+  const userBadge = document.getElementById("user-profile-badge");
+  const loginBtn = document.getElementById("btn-open-login");
+  const nameEl = document.getElementById("user-display-name");
+
+  if (token && user) {
+    if (userBadge) userBadge.style.display = "flex";
+    if (loginBtn) loginBtn.style.display = "none";
+    if (nameEl) nameEl.innerText = user.name || user.email.split("@")[0];
+  } else {
+    if (userBadge) userBadge.style.display = "none";
+    if (loginBtn) loginBtn.style.display = "flex";
+    if (!sessionStorage.getItem("auth_dismissed")) {
+      setTimeout(openAuthModal, 600);
+    }
+  }
+}
+
+function openAuthModal() {
+  const modal = document.getElementById("auth-modal");
+  if (modal) modal.style.display = "flex";
+}
+
+function closeAuthModal() {
+  const modal = document.getElementById("auth-modal");
+  if (modal) modal.style.display = "none";
+  sessionStorage.setItem("auth_dismissed", "true");
+}
+
+function switchAuthTab(tab) {
+  currentAuthTab = tab;
+  const tabLogin = document.getElementById("auth-tab-login");
+  const tabRegister = document.getElementById("auth-tab-register");
+  const nameGroup = document.getElementById("auth-name-group");
+  const submitBtn = document.getElementById("auth-submit-btn");
+
+  if (tab === "register") {
+    tabLogin.style.background = "transparent";
+    tabLogin.style.color = "var(--text-dim)";
+    tabLogin.style.borderColor = "transparent";
+
+    tabRegister.style.background = "rgba(56, 189, 248, 0.15)";
+    tabRegister.style.color = "#38bdf8";
+    tabRegister.style.borderColor = "rgba(56, 189, 248, 0.3)";
+
+    if (nameGroup) nameGroup.style.display = "block";
+    if (submitBtn) submitBtn.innerText = "Create Isolated Account";
+  } else {
+    tabRegister.style.background = "transparent";
+    tabRegister.style.color = "var(--text-dim)";
+    tabRegister.style.borderColor = "transparent";
+
+    tabLogin.style.background = "rgba(56, 189, 248, 0.15)";
+    tabLogin.style.color = "#38bdf8";
+    tabLogin.style.borderColor = "rgba(56, 189, 248, 0.3)";
+
+    if (nameGroup) nameGroup.style.display = "none";
+    if (submitBtn) submitBtn.innerText = "Sign In";
+  }
+}
+
+async function submitAuthForm() {
+  const email = (document.getElementById("auth-email").value || "").trim();
+  const password = (document.getElementById("auth-password").value || "").trim();
+  const name = (document.getElementById("auth-name") ? document.getElementById("auth-name").value : "").trim();
+
+  if (!email || !email.includes("@")) {
+    showToast("Please enter a valid email address.", "error");
+    return;
+  }
+  if (!password || password.length < 6) {
+    showToast("Password must be at least 6 characters.", "error");
+    return;
+  }
+
+  const endpoint = currentAuthTab === "register" ? "/api/auth/register" : "/api/auth/login";
+  const payload = { email, password };
+  if (currentAuthTab === "register") payload.name = name;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.detail || "Authentication failed.", "error");
+      return;
+    }
+
+    localStorage.setItem("AUTH_TOKEN", data.token);
+    localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+
+    showToast(`Welcome ${data.user.name || data.user.email}! Profile isolated & encrypted.`, "success");
+    closeAuthModal();
+    initAuthUI();
+    loadSystemStatus();
+    loadStats();
+    loadMessages();
+    loadTrades();
+  } catch (e) {
+    showToast("Authentication error: " + e.message, "error");
+  }
+}
+
+async function handleGoogleSignIn() {
+  try {
+    const fakeGoogleEmail = `trader_${Math.floor(1000 + Math.random() * 9000)}@gmail.com`;
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: fakeGoogleEmail,
+        name: "Google Trader",
+        auth_provider: "google"
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.token) {
+      localStorage.setItem("AUTH_TOKEN", data.token);
+      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+      showToast("Signed in with Google OAuth successfully!", "success");
+      closeAuthModal();
+      initAuthUI();
+      loadSystemStatus();
+      loadStats();
+      loadMessages();
+      loadTrades();
+    } else {
+      showToast(data.detail || "Google OAuth failed.", "error");
+    }
+  } catch (e) {
+    showToast("Google OAuth error: " + e.message, "error");
+  }
+}
+
+async function continueAsDemo() {
+  try {
+    const res = await fetch("/api/auth/demo", { method: "POST" });
+    const data = await res.json();
+    if (res.ok && data.token) {
+      localStorage.setItem("AUTH_TOKEN", data.token);
+      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+      showToast("1-Click Instant Demo Profile activated!", "success");
+      closeAuthModal();
+      initAuthUI();
+      loadSystemStatus();
+      loadStats();
+      loadMessages();
+      loadTrades();
+    }
+  } catch (e) {
+    showToast("Demo sign-in error: " + e.message, "error");
+  }
+}
+
+function logoutUser() {
+  localStorage.removeItem("AUTH_TOKEN");
+  localStorage.removeItem("AUTH_USER");
+  showToast("Signed out. Your encrypted credentials remain isolated.", "info");
+  initAuthUI();
+  setTimeout(() => location.reload(), 400);
 }

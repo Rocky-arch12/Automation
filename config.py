@@ -38,6 +38,11 @@ class Settings:
     XM_MT5_PATH: str = os.getenv("XM_MT5_PATH", "")
     XM_AUTO_EXECUTION: bool = os.getenv("XM_AUTO_EXECUTION", "true").lower() in ["true", "1", "yes"]
 
+    # Security, Encryption & Multi-Tenant Auth
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "alphasignal-quantum-jwt-secret-key-2026-super-secure")
+    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "Dn5fuVgK6PtezCe9lGowX526ZsLmE88iXNwEcRfk04Y=")
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+
     # System Status flags
     LISTENER_RUNNING: bool = False
     LISTENER_TYPE: str = "none" # "bot", "client", "simulator"

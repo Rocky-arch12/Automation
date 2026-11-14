@@ -1,9 +1,20 @@
 import json
+import secrets
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from config import settings
+from auth import encrypt_credential, decrypt_credential, hash_password, verify_password
+
+SENSITIVE_KEYS = {
+    "XM_MT5_PASSWORD",
+    "XM_MT5_LOGIN",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_API_HASH",
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY"
+}
 
 @asynccontextmanager
 async def get_db():
@@ -72,6 +83,32 @@ async def init_db():
             )
         """)
 
+        # Multi-Tenant Users Table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT,
+                password_hash TEXT,
+                auth_provider TEXT DEFAULT 'local',
+                avatar_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Isolated User Encrypted Settings Table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                is_encrypted INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, key)
+            )
+        """)
+
         # Trades Master Table (Tracks unique Trade ID and Lifecycle Outcomes)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
@@ -121,6 +158,24 @@ async def init_db():
         except Exception:
             pass
 
+        # Multi-Tenant User Isolation Columns
+        try:
+            await conn.execute("ALTER TABLE messages ADD COLUMN user_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass
+
+        try:
+            await conn.execute("ALTER TABLE trades ADD COLUMN user_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass
+
+        try:
+            await conn.execute("ALTER TABLE system_logs ADD COLUMN user_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass
+
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_interpretations_intent ON interpretations(intent)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_created ON system_logs(created_at DESC)")
@@ -636,50 +691,121 @@ async def get_trade_timeline(trade_id: str) -> Dict[str, Any]:
         trade["messages"] = messages
         return trade
 
-async def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
+async def get_logs(limit: int = 100, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     async with get_db() as conn:
-        cursor = await conn.execute("SELECT * FROM system_logs ORDER BY id DESC LIMIT ?", (limit,))
+        if user_id and user_id != "default":
+            cursor = await conn.execute("SELECT * FROM system_logs WHERE user_id = ? OR user_id = 'default' ORDER BY id DESC LIMIT ?", (user_id, limit))
+        else:
+            cursor = await conn.execute("SELECT * FROM system_logs ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in await cursor.fetchall()]
 
-async def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
-    async with get_db() as conn:
-        cursor = await conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        if row:
-            return row["value"]
-        return default
-
-async def set_setting(key: str, value: str):
+# Multi-Tenant User Management
+async def create_user(email: str, password: Optional[str] = None, name: str = "", auth_provider: str = "local", avatar_url: Optional[str] = None) -> Dict[str, Any]:
+    user_id = "usr_" + secrets.token_hex(8)
+    pw_hash = hash_password(password) if password else None
+    display_name = name or email.split("@")[0]
+    clean_email = email.lower().strip()
     async with get_db() as conn:
         await conn.execute(
             """
-            INSERT INTO app_settings (key, value, updated_at) 
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+            INSERT INTO users (id, email, name, password_hash, auth_provider, avatar_url)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (key, str(value))
+            (user_id, clean_email, display_name, pw_hash, auth_provider, avatar_url)
         )
         await conn.commit()
+    return {
+        "id": user_id,
+        "email": clean_email,
+        "name": display_name,
+        "auth_provider": auth_provider,
+        "avatar_url": avatar_url
+    }
 
-async def set_settings_bulk(settings_dict: Dict[str, Any]):
+async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     async with get_db() as conn:
-        for key, value in settings_dict.items():
-            if value is not None:
-                await conn.execute(
-                    """
-                    INSERT INTO app_settings (key, value, updated_at) 
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
-                    """,
-                    (key, str(value))
-                )
+        cursor = await conn.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    async with get_db() as conn:
+        cursor = await conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+# Isolated Encrypted User Settings
+async def get_user_setting(user_id: str, key: str, default: Optional[str] = None) -> Optional[str]:
+    async with get_db() as conn:
+        if user_id and user_id != "default":
+            cursor = await conn.execute("SELECT value, is_encrypted FROM user_settings WHERE user_id = ? AND key = ?", (user_id, key))
+            row = await cursor.fetchone()
+            if row:
+                val = row["value"]
+                if row["is_encrypted"] or key in SENSITIVE_KEYS:
+                    return decrypt_credential(val)
+                return val
+
+        cursor = await conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if row:
+            val = row["value"]
+            if key in SENSITIVE_KEYS:
+                return decrypt_credential(val)
+            return val
+        return default
+
+async def set_user_setting(user_id: str, key: str, value: Any):
+    is_sens = key in SENSITIVE_KEYS
+    val_to_store = encrypt_credential(str(value)) if is_sens else str(value)
+    async with get_db() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_settings (user_id, key, value, is_encrypted, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, key) DO UPDATE SET 
+                value = excluded.value, 
+                is_encrypted = excluded.is_encrypted,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, key, val_to_store, 1 if is_sens else 0)
+        )
+        if user_id == "default":
+            await conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at) 
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+                """,
+                (key, val_to_store)
+            )
         await conn.commit()
 
-async def get_all_settings() -> Dict[str, str]:
+async def get_user_all_settings(user_id: str) -> Dict[str, str]:
     async with get_db() as conn:
         cursor = await conn.execute("SELECT key, value FROM app_settings")
-        rows = await cursor.fetchall()
-        return {r["key"]: r["value"] for r in rows}
+        res = {r["key"]: (decrypt_credential(r["value"]) if r["key"] in SENSITIVE_KEYS else r["value"]) for r in await cursor.fetchall()}
+        if user_id and user_id != "default":
+            cursor = await conn.execute("SELECT key, value, is_encrypted FROM user_settings WHERE user_id = ?", (user_id,))
+            for r in await cursor.fetchall():
+                k = r["key"]
+                v = r["value"]
+                res[k] = decrypt_credential(v) if (r["is_encrypted"] or k in SENSITIVE_KEYS) else v
+        return res
+
+async def get_setting(key: str, default: Optional[str] = None, user_id: str = "default") -> Optional[str]:
+    return await get_user_setting(user_id, key, default)
+
+async def set_setting(key: str, value: str, user_id: str = "default"):
+    await set_user_setting(user_id, key, value)
+
+async def set_settings_bulk(settings_dict: Dict[str, Any], user_id: str = "default"):
+    for key, value in settings_dict.items():
+        if value is not None:
+            await set_user_setting(user_id, key, value)
+
+async def get_all_settings(user_id: str = "default") -> Dict[str, str]:
+    return await get_user_all_settings(user_id)
 
 async def clear_all_data():
     async with get_db() as conn:

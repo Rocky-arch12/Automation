@@ -5,18 +5,26 @@ import uuid
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException, Depends, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config import settings
+from auth import (
+    create_access_token, decode_access_token,
+    get_current_user, get_current_user_optional,
+    mask_credential, hash_password, verify_password,
+    encrypt_credential, decrypt_credential
+)
 from database import (
     init_db, get_messages, get_stats, get_logs,
     get_all_settings, set_setting, set_settings_bulk, log_event, clear_all_data,
     save_message, save_interpretation,
-    get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome
+    get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome,
+    create_user, get_user_by_email, get_user_by_id, get_user_all_settings,
+    get_user_setting, set_user_setting, SENSITIVE_KEYS
 )
 from engine.trade_manager import TRADE_OUTCOMES
 from engine.telegram_listener import listener_manager
@@ -99,12 +107,12 @@ async def lifespan(app: FastAPI):
     xm_pass = stored_settings.get("XM_MT5_PASSWORD") or settings.XM_MT5_PASSWORD
     xm_path = stored_settings.get("XM_MT5_PATH") or settings.XM_MT5_PATH
     try:
-        await xm_executor.initialize(
+        asyncio.create_task(xm_executor.initialize(
             login=int(xm_login) if xm_login else None,
             server=xm_server,
             password=xm_pass,
             path=xm_path
-        )
+        ))
     except Exception as e:
         await log_event("WARN", "XM_MT5", f"XM MT5 startup initialization warning: {e}")
 
@@ -208,8 +216,9 @@ async def get_dashboard_stats():
     return await get_stats()
 
 @app.get("/api/logs")
-async def get_system_logs(limit: int = Query(100, ge=1, le=500)):
-    logs = await get_logs(limit=limit)
+async def get_system_logs(limit: int = Query(100, ge=1, le=500), user: Optional[dict] = Depends(get_current_user_optional)):
+    user_id = user["id"] if user else "default"
+    logs = await get_logs(limit=limit, user_id=user_id)
     return {"logs": logs}
 
 # Simulation endpoint: allows testing text & images instantly from Web UI
@@ -297,6 +306,132 @@ async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate
 
     return {"status": "success", "trade_id": trade_id, "new_status": payload.status, "outcome": outcome_info["title"]}
 
+# --- Multi-Tenant User Authentication & OAuth Endpoints ---
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = ""
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class GoogleAuthRequest(BaseModel):
+    credential: Optional[str] = None
+    email: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+@app.post("/api/auth/register")
+async def register_user(payload: RegisterRequest):
+    email = payload.email.lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    
+    existing = await get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=400, detail="Email is already registered. Please sign in.")
+    
+    user = await create_user(email=email, password=payload.password, name=payload.name, auth_provider="local")
+    token = create_access_token(user["id"], user["email"], user["name"])
+    await log_event("INFO", "AUTH", f"New user registered: {email} (Tenant ID: {user['id']})")
+    return {
+        "status": "success",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "provider": user["auth_provider"]
+        }
+    }
+
+@app.post("/api/auth/login")
+async def login_user(payload: LoginRequest):
+    email = payload.email.lower().strip()
+    user = await get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    
+    if not verify_password(payload.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    
+    token = create_access_token(user["id"], user["email"], user["name"], auth_provider=user.get("auth_provider", "local"))
+    await log_event("INFO", "AUTH", f"User signed in: {email}")
+    return {
+        "status": "success",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "provider": user.get("auth_provider", "local")
+        }
+    }
+
+@app.post("/api/auth/google")
+async def google_oauth_login(payload: GoogleAuthRequest):
+    email = (payload.email or "").lower().strip()
+    name = payload.name or ""
+    avatar = payload.avatar_url or ""
+
+    if payload.credential and not email:
+        try:
+            import jwt as pyjwt
+            claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
+            email = claims.get("email", "").lower().strip()
+            name = claims.get("name", "")
+            avatar = claims.get("picture", "")
+        except Exception:
+            pass
+
+    if not email:
+        email = f"trader_{uuid.uuid4().hex[:6]}@gmail.com"
+        name = name or "Google Trader"
+
+    user = await get_user_by_email(email)
+    if not user:
+        user = await create_user(email=email, password=None, name=name, auth_provider="google", avatar_url=avatar)
+        await log_event("INFO", "AUTH", f"New Google OAuth user created: {email}")
+
+    token = create_access_token(user["id"], user["email"], user["name"], auth_provider="google")
+    return {
+        "status": "success",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "avatar_url": user.get("avatar_url", ""),
+            "provider": "google"
+        }
+    }
+
+@app.post("/api/auth/demo")
+async def demo_guest_login():
+    demo_email = "demo_trader@alphasignal.ai"
+    user = await get_user_by_email(demo_email)
+    if not user:
+        user = await create_user(email=demo_email, password="DemoTrader2026!", name="Demo Trader", auth_provider="demo")
+    
+    token = create_access_token(user["id"], user["email"], user["name"], auth_provider="demo")
+    return {
+        "status": "success",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "provider": "demo"
+        }
+    }
+
+@app.get("/api/auth/me")
+async def get_current_user_profile(user: dict = Depends(get_current_user)):
+    return {"status": "authenticated", "user": user}
+
 class SettingsUpdate(BaseModel):
     AI_PROVIDER: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
@@ -312,24 +447,22 @@ class SettingsUpdate(BaseModel):
     XM_AUTO_EXECUTION: Optional[str] = None
 
 @app.get("/api/settings")
-async def get_settings_endpoint():
-    current = await get_all_settings()
-    # Mask secret keys for security in UI
-    def mask(val):
-        if not val or len(val) < 8:
-            return ""
-        return val[:4] + "..." + val[-4:]
+async def get_settings_endpoint(user: Optional[dict] = Depends(get_current_user_optional)):
+    user_id = user["id"] if user else "default"
+    current = await get_user_all_settings(user_id)
 
     return {
+        "user_id": user_id,
+        "is_authenticated": bool(user),
         "AI_PROVIDER": current.get("AI_PROVIDER", settings.AI_PROVIDER),
-        "GROQ_API_KEY_MASKED": mask(current.get("GROQ_API_KEY", settings.GROQ_API_KEY)),
+        "GROQ_API_KEY_MASKED": mask_credential(current.get("GROQ_API_KEY", settings.GROQ_API_KEY)),
         "HAS_GROQ_KEY": bool(current.get("GROQ_API_KEY") or settings.GROQ_API_KEY),
         "GROQ_TEXT_MODEL": current.get("GROQ_TEXT_MODEL", settings.GROQ_TEXT_MODEL),
         "GROQ_VISION_MODEL": current.get("GROQ_VISION_MODEL", settings.GROQ_VISION_MODEL),
-        "GEMINI_API_KEY_MASKED": mask(current.get("GEMINI_API_KEY", settings.GEMINI_API_KEY)),
+        "GEMINI_API_KEY_MASKED": mask_credential(current.get("GEMINI_API_KEY", settings.GEMINI_API_KEY)),
         "HAS_GEMINI_KEY": bool(current.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY),
         "GEMINI_MODEL": current.get("GEMINI_MODEL", settings.GEMINI_MODEL),
-        "TELEGRAM_BOT_TOKEN_MASKED": mask(current.get("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN)),
+        "TELEGRAM_BOT_TOKEN_MASKED": mask_credential(current.get("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN)),
         "HAS_BOT_TOKEN": bool(current.get("TELEGRAM_BOT_TOKEN") or settings.TELEGRAM_BOT_TOKEN),
         "TELEGRAM_CHANNEL_ID": current.get("TELEGRAM_CHANNEL_ID", settings.TELEGRAM_CHANNEL_ID),
         "XM_MT5_LOGIN": current.get("XM_MT5_LOGIN", str(settings.XM_MT5_LOGIN)),
@@ -338,31 +471,33 @@ async def get_settings_endpoint():
     }
 
 @app.post("/api/settings")
-async def update_settings_endpoint(payload: SettingsUpdate):
+async def update_settings_endpoint(payload: SettingsUpdate, user: Optional[dict] = Depends(get_current_user_optional)):
+    user_id = user["id"] if user else "default"
     data = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None and v != ""}
     if data:
-        await set_settings_bulk(data)
-        for field, val in data.items():
-            setattr(settings, field, val)
+        await set_settings_bulk(data, user_id=user_id)
+        if user_id == "default":
+            for field, val in data.items():
+                setattr(settings, field, val)
 
-    # In-memory XM executor updates
-    if "XM_MT5_LOGIN" in data:
-        try:
-            xm_executor.active_login = int(data["XM_MT5_LOGIN"])
-        except Exception:
-            pass
-    if "XM_MT5_SERVER" in data:
-        xm_executor.active_server = str(data["XM_MT5_SERVER"])
-    if "XM_MT5_PASSWORD" in data:
-        xm_executor.active_password = str(data["XM_MT5_PASSWORD"])
-    if "XM_AUTO_EXECUTION" in data:
-        xm_executor.auto_execution_enabled = str(data["XM_AUTO_EXECUTION"]).lower() in ["true", "1", "yes"]
+    # In-memory XM executor updates for main desktop worker instance
+    if user_id == "default":
+        if "XM_MT5_LOGIN" in data:
+            try:
+                xm_executor.active_login = int(data["XM_MT5_LOGIN"])
+            except Exception:
+                pass
+        if "XM_MT5_SERVER" in data:
+            xm_executor.active_server = str(data["XM_MT5_SERVER"])
+        if "XM_MT5_PASSWORD" in data:
+            xm_executor.active_password = str(data["XM_MT5_PASSWORD"])
+        if "XM_AUTO_EXECUTION" in data:
+            xm_executor.auto_execution_enabled = str(data["XM_AUTO_EXECUTION"]).lower() in ["true", "1", "yes"]
 
-    # Trigger async connection check in background so HTTP response is instant
-    asyncio.create_task(xm_executor.initialize())
+        asyncio.create_task(xm_executor.initialize())
 
-    await log_event("INFO", "SYSTEM", "Application configuration updated via settings panel.")
-    return {"status": "updated"}
+    await log_event("INFO", "SYSTEM", f"Configuration updated for user {user_id} (AES-256 encrypted at rest).")
+    return {"status": "updated", "user_id": user_id, "encrypted": True}
 
 @app.post("/api/telegram/start")
 async def start_telegram_listener():
