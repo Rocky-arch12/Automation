@@ -1415,6 +1415,11 @@ window.addEventListener("hashchange", handleHashRouting);
 let currentAuthTab = "login";
 
 async function checkAuthSession() {
+  const token = getAuthToken();
+  if (!token && !document.cookie.includes("access_token")) {
+    updateUserUI(null);
+    return null;
+  }
   try {
     const res = await fetch("/api/auth/me", {
       method: "GET",
@@ -1478,6 +1483,7 @@ async function submitAuthForm() {
 // Official Google Identity Services & OAuth 2.0 Flow (.env Driven)
 // ============================================================
 let backendGoogleClientId = "";
+let gisInitialized = false;
 
 async function loadAuthConfig() {
   try {
@@ -1496,8 +1502,10 @@ async function loadAuthConfig() {
 
 function initGoogleIdentityServices() {
   if (!backendGoogleClientId) return;
+  if (gisInitialized) return;
   if (window.google && window.google.accounts && window.google.accounts.id) {
     try {
+      gisInitialized = true;
       google.accounts.id.initialize({
         client_id: backendGoogleClientId,
         callback: handleGoogleCredentialResponse,
@@ -1521,6 +1529,7 @@ function initGoogleIdentityServices() {
       }
     } catch (e) {
       console.warn("GIS init warning:", e);
+      gisInitialized = false;
     }
   }
 }
@@ -1528,18 +1537,8 @@ function initGoogleIdentityServices() {
 // 1. Direct Google OAuth Redirect
 function triggerGoogleOAuthRedirect() {
   if (!backendGoogleClientId) {
-    showToast("Google Client ID is not set in .env. Click your authorized administrator account below for 1-click access.", "info");
+    showToast("Google Client ID is not configured in .env. Please add GOOGLE_CLIENT_ID to your local .env file.", "warning");
     return;
-  }
-  if (window.google && window.google.accounts && window.google.accounts.id) {
-    try {
-      google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          redirectToGoogleOAuthPage();
-        }
-      });
-      return;
-    } catch (e) { }
   }
   redirectToGoogleOAuthPage();
 }
