@@ -1567,43 +1567,12 @@ function redirectToGoogleOAuthPage() {
   window.location.href = authUrl;
 }
 
-async function loginAuthorizedAdmin(email) {
-  const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
-  const cleanEmail = (email || "").toLowerCase().trim();
-
-  if (!allowed.includes(cleanEmail)) {
-    showToast(`Access Denied: '${cleanEmail}' is not an authorized administrator.`, "error");
-    return;
-  }
-
-  try {
-    showToast(`Authenticating administrator: ${cleanEmail}...`, "info");
-    const res = await fetch("/api/auth/google", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: cleanEmail,
-        name: cleanEmail.split("@")[0],
-        auth_provider: "google"
-      })
-    });
-    const data = await res.json();
-    if (res.ok && data.user) {
-      if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
-      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-      updateUserUI(data.user);
-      showToast(`Welcome back, ${data.user.email}! (Admin Access Verified)`, "success");
-      navigateTo("dashboard");
-    } else {
-      showToast(data.detail || "Authentication rejected by security policy.", "error");
-    }
-  } catch (e) {
-    showToast("Login connection error: " + e.message, "error");
-  }
+function loginAuthorizedAdmin() {
+  triggerGoogleOAuthRedirect();
 }
 
-function fastAdminLogin(email) {
-  return loginAuthorizedAdmin(email);
+function fastAdminLogin() {
+  triggerGoogleOAuthRedirect();
 }
 
 // 2. Handle Google Credential Callback from Google Identity Services

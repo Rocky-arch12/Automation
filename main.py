@@ -387,46 +387,54 @@ async def login_user():
 
 @app.post("/api/auth/google")
 async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
-    email = (payload.email or "").lower().strip()
-    name = payload.name or ""
-    avatar = payload.avatar_url or ""
+    """
+    Cryptographically verifies Google OAuth tokens directly with Google's servers.
+    Arbitrary unverified email spoofing or bypass is strictly rejected.
+    """
+    email = ""
+    name = ""
+    avatar = ""
+    verified = False
 
+    # 1. Verify Google ID token (JWT) via Google's official tokeninfo endpoint
     if payload.credential:
         try:
             import urllib.request
             tokeninfo_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={payload.credential}"
             with urllib.request.urlopen(tokeninfo_url, timeout=5) as resp:
                 gdata = json.loads(resp.read().decode("utf-8"))
-                email = gdata.get("email", "").lower().strip()
-                name = gdata.get("name", name)
-                avatar = gdata.get("picture", avatar)
-        except Exception:
-            try:
-                import jwt as pyjwt
-                claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
-                email = claims.get("email", "").lower().strip()
-                name = claims.get("name", name)
-                avatar = claims.get("picture", avatar)
-            except Exception:
-                pass
+                email = (gdata.get("email") or "").lower().strip()
+                name = gdata.get("name") or ""
+                avatar = gdata.get("picture") or ""
+                if email and str(gdata.get("email_verified", "")).lower() == "true":
+                    verified = True
+        except Exception as ex:
+            print(f"[GOOGLE TOKENINFO VERIFY FAILED] {ex}")
 
-    if payload.access_token and not email:
+    # 2. Verify Google OAuth Access Token via Google's official userinfo endpoint
+    if not verified and payload.access_token:
         try:
             import urllib.request
             userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
             req = urllib.request.Request(userinfo_url, headers={"Authorization": f"Bearer {payload.access_token}"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 gdata = json.loads(resp.read().decode("utf-8"))
-                email = gdata.get("email", "").lower().strip()
-                name = gdata.get("name", name)
-                avatar = gdata.get("picture", avatar)
+                email = (gdata.get("email") or "").lower().strip()
+                name = gdata.get("name") or ""
+                avatar = gdata.get("picture") or ""
+                if email and str(gdata.get("email_verified", "")).lower() == "true":
+                    verified = True
         except Exception as ex:
-            print(f"[GOOGLE USERINFO ERROR] {ex}")
+            print(f"[GOOGLE USERINFO VERIFY FAILED] {ex}")
 
-    if not email:
-        raise HTTPException(status_code=400, detail="Missing Google email from OAuth payload.")
+    # STRICT: Reject any attempt where Google did not cryptographically verify the token
+    if not verified or not email:
+        raise HTTPException(
+            status_code=401,
+            detail="Google Authentication Failed: Cryptographic token could not be verified by Google. Please sign in via Google."
+        )
 
-    # STRICT SECURITY CHECK: Only allow whitelisted administrator emails
+    # STRICT: Only allow whitelisted administrator emails
     if not is_email_authorized(email):
         await log_event("WARNING", "AUTH_DENIED", f"Unauthorized Google OAuth attempt blocked: {email}")
         raise HTTPException(
@@ -437,7 +445,7 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
     user = await get_user_by_email(email)
     if not user:
         user = await create_user(email=email, password=None, name=name or email.split("@")[0], auth_provider="google", avatar_url=avatar)
-        await log_event("INFO", "AUTH", f"New whitelisted Google OAuth user authenticated: {email}")
+        await log_event("INFO", "AUTH", f"Authorized Google administrator authenticated: {email}")
 
     token = create_access_token(user["id"], user["email"], user["name"], auth_provider="google")
     set_auth_cookie(response, token)
