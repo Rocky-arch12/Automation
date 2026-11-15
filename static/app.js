@@ -26,10 +26,6 @@ function getApiBase() {
     "cpu-baseline-injection-patrol.trycloudflare.com",
     "demanding-reports-street-plugins.trycloudflare.com"
   ];
-    "thoroughly-imagination-pam-shake.trycloudflare.com"
-    "thoroughly-imagination-pam-shake.trycloudflare.com",
-    "cpu-baseline-injection-patrol.trycloudflare.com"
-  ];
   if (stored && staleTunnels.some(stale => stored.includes(stale))) {
     stored = CURRENT_ACTIVE_TUNNEL;
     localStorage.setItem("API_BACKEND_URL", CURRENT_ACTIVE_TUNNEL);
