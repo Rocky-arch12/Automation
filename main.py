@@ -366,6 +366,7 @@ class LoginRequest(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     credential: Optional[str] = None
+    access_token: Optional[str] = None
     email: Optional[str] = None
     name: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -457,6 +458,19 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
                 avatar = claims.get("picture", avatar)
             except Exception:
                 pass
+
+    if payload.access_token and not email:
+        try:
+            import urllib.request
+            userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+            req = urllib.request.Request(userinfo_url, headers={"Authorization": f"Bearer {payload.access_token}"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                gdata = json.loads(resp.read().decode("utf-8"))
+                email = gdata.get("email", "").lower().strip()
+                name = gdata.get("name", name)
+                avatar = gdata.get("picture", avatar)
+        except Exception as ex:
+            print(f"[GOOGLE USERINFO ERROR] {ex}")
 
     if not email:
         raise HTTPException(status_code=400, detail="Missing Google email from OAuth payload.")

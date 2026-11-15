@@ -136,6 +136,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   initSpotlight();
   setupDragAndDrop();
 
+  // 1. Check if returning from official Google OAuth redirect
+  if (checkOAuthRedirectHash()) {
+    return;
+  }
+
+  // 2. Initialize official Google Identity Services
+  initGoogleIdentityServices();
+
   // Check persisted session via HttpOnly cookie & token
   const user = await checkAuthSession();
 
@@ -1353,6 +1361,10 @@ function navigateTo(viewName, targetAnchor) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  if (viewName === "login") {
+    setTimeout(initGoogleIdentityServices, 150);
+  }
+
   // If entering dashboard, initialize & refresh data streams
   if (viewName === "dashboard") {
     loadSystemStatus();
@@ -1539,50 +1551,131 @@ async function submitAuthForm() {
   }
 }
 
-async function handleGoogleSignIn(selectedEmail) {
-  try {
-    const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
-    let emailToUse = selectedEmail;
+// ============================================================
+// Official Google Identity Services & OAuth 2.0 Flow
+// ============================================================
+const GOOGLE_CLIENT_ID = "787459168867-aksr8lps7adf9t6c1av95863f8npf7v1.apps.googleusercontent.com";
 
-    if (!emailToUse) {
-      // Prompt user to select between their authorized accounts or enter email
-      const choice = prompt(
-        "Select your authorized Google Account:\n1. riddhesh.firake@gmail.com\n2. acc94926@gmail.com\n\nType 1 or 2 (or type your email):",
-        "1"
-      );
-      if (!choice) return;
-      if (choice.trim() === "1") emailToUse = "riddhesh.firake@gmail.com";
-      else if (choice.trim() === "2") emailToUse = "acc94926@gmail.com";
-      else emailToUse = choice.trim().toLowerCase();
+function initGoogleIdentityServices() {
+  if (window.google && window.google.accounts && window.google.accounts.id) {
+    try {
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredentialResponse,
+        auto_select: false,
+        cancel_on_tap_outside: true
+      });
+      const container = document.getElementById("g_id_signin_container");
+      if (container) {
+        container.innerHTML = "";
+        google.accounts.id.renderButton(container, {
+          theme: "outline",
+          size: "large",
+          type: "standard",
+          shape: "rectangular",
+          text: "continue_with",
+          logo_alignment: "left",
+          width: 320
+        });
+        const directBtn = document.getElementById("google-direct-auth-btn");
+        if (directBtn) directBtn.style.display = "none";
+      }
+    } catch (e) {
+      console.warn("GIS init warning:", e);
     }
+  }
+}
 
-    if (!allowed.includes(emailToUse.toLowerCase())) {
-      showToast(`Access Denied: '${emailToUse}' is not an authorized administrator email.`, "error");
+// 1. Direct Google OAuth Redirect (Redirects to official accounts.google.com screen)
+function triggerGoogleOAuthRedirect() {
+  if (window.google && window.google.accounts && window.google.accounts.id) {
+    try {
+      google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          redirectToGoogleOAuthPage();
+        }
+      });
       return;
-    }
+    } catch (e) { }
+  }
+  redirectToGoogleOAuthPage();
+}
 
+function redirectToGoogleOAuthPage() {
+  const redirectUri = window.location.origin + window.location.pathname;
+  const state = Math.random().toString(36).substring(7);
+  const nonce = Math.random().toString(36).substring(7);
+
+  const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: "token id_token",
+    scope: "openid email profile",
+    state: state,
+    nonce: nonce,
+    prompt: "select_account"
+  }).toString();
+
+  window.location.href = authUrl;
+}
+
+// 2. Handle Google Credential Callback from Google Identity Services
+async function handleGoogleCredentialResponse(response) {
+  if (!response || !response.credential) {
+    showToast("No Google credential returned.", "error");
+    return;
+  }
+  await processGoogleAuthPayload({ credential: response.credential });
+}
+
+// 3. Process Google Token Payload with Backend & Whitelist
+async function processGoogleAuthPayload(payload) {
+  try {
+    showToast("Verifying Google account with security whitelist...", "info");
     const res = await fetch("/api/auth/google", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: emailToUse,
-        name: emailToUse.split("@")[0],
-        auth_provider: "google"
-      })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (res.ok && data.user) {
       if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
       localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
       updateUserUI(data.user);
-      showToast(`Signed in as ${data.user.email} (Whitelisted Administrator)`, "success");
+      showToast(`Welcome back, ${data.user.name || data.user.email}! (Admin Verified)`, "success");
       navigateTo("dashboard");
     } else {
-      showToast(data.detail || "Google OAuth failed.", "error");
+      showToast(data.detail || "Access Denied: Google email not authorized.", "error");
     }
   } catch (e) {
     showToast("Google OAuth error: " + e.message, "error");
   }
+}
+
+// 4. Handle OAuth Redirect Callback in URL Hash (#id_token=... or #access_token=...)
+function checkOAuthRedirectHash() {
+  const hash = window.location.hash;
+  if (hash && (hash.includes("id_token=") || hash.includes("access_token="))) {
+    const params = new URLSearchParams(hash.replace(/^#/, ""));
+    const idToken = params.get("id_token");
+    const accessToken = params.get("access_token");
+
+    // Clean hash from URL so token is not exposed in address bar
+    try {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch (e) { }
+
+    if (idToken || accessToken) {
+      processGoogleAuthPayload({ credential: idToken, access_token: accessToken });
+      return true;
+    }
+  }
+  return false;
+}
+
+// Backwards-compatible alias for any inline handlers
+function handleGoogleSignIn() {
+  triggerGoogleOAuthRedirect();
 }
 
 async function continueAsDemo() {
