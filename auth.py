@@ -128,8 +128,33 @@ def clear_auth_cookie(response: Response):
     except Exception as e:
         print(f"[AUTH COOKIE CLEAR ERROR] {e}")
 
+ALLOWED_GOOGLE_EMAILS = {
+    "riddhesh.firake@gmail.com",
+    "acc94926@gmail.com"
+}
+
+def is_email_authorized(email: str) -> bool:
+    """Checks whether an email is in the authorized admin whitelist."""
+    if not email:
+        return False
+    return email.lower().strip() in ALLOWED_GOOGLE_EMAILS
+
 async def get_current_user_optional(request: Request, authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
-    """Dependency: returns the authenticated user from HttpOnly Cookie or Bearer header, else None."""
+    """Dependency: returns the authenticated user from HttpOnly Cookie, Bearer header, or Ngrok Edge OAuth."""
+    # 1. Check if request authenticated via Ngrok Google OAuth at the edge
+    if request:
+        ngrok_email = request.headers.get("ngrok-auth-user-email")
+        if ngrok_email:
+            clean_email = ngrok_email.lower().strip()
+            if is_email_authorized(clean_email):
+                return {
+                    "id": f"user_{hashlib.md5(clean_email.encode()).hexdigest()[:8]}",
+                    "email": clean_email,
+                    "name": request.headers.get("ngrok-auth-user-name", clean_email.split("@")[0]),
+                    "provider": "google-edge"
+                }
+
+    # 2. Check HttpOnly cookie or Authorization Bearer header
     token = request.cookies.get("access_token") if request else None
     if not token and authorization:
         token = authorization
@@ -151,7 +176,18 @@ async def get_current_user(request: Request, authorization: Optional[str] = Head
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please sign in or use Google OAuth.",
+            detail="Authentication required. Please sign in via Google OAuth.",
             headers={"WWW-Authenticate": "Bearer"}
+        )
+    return user
+
+async def get_current_authorized_user(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Dependency: enforces authenticated session AND whitelisted admin email or raises HTTP 403."""
+    user = await get_current_user(request, authorization)
+    user_email = (user.get("email") or "").lower().strip()
+    if not is_email_authorized(user_email):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: Account '{user_email}' is not authorized. Only whitelisted administrators (riddhesh.firake@gmail.com, acc94926@gmail.com) may access this trading vault."
         )
     return user

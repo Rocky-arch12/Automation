@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from config import settings
 from auth import (
     create_access_token, decode_access_token,
-    get_current_user, get_current_user_optional,
+    get_current_user, get_current_user_optional, get_current_authorized_user,
+    is_email_authorized, ALLOWED_GOOGLE_EMAILS,
     mask_credential, hash_password, verify_password,
     encrypt_credential, decrypt_credential,
     set_auth_cookie, clear_auth_cookie
@@ -337,7 +338,7 @@ async def get_xm_open_positions():
 
 # --- Database Slate Reset Endpoint (Clean start) ---
 @app.post("/api/reset-data")
-async def reset_data_endpoint():
+async def reset_data_endpoint(user: dict = Depends(get_current_authorized_user)):
     """Clears signal history, trades, events, interpretations, and logs for a clean slate."""
     await clear_all_data()
     await ws_manager.broadcast({"type": "DATA_RESET"})
@@ -367,6 +368,12 @@ async def register_user(payload: RegisterRequest, response: Response):
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
     
+    if not is_email_authorized(email):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: Email '{email}' is not on the authorized whitelist. Only whitelisted administrators (riddhesh.firake@gmail.com, acc94926@gmail.com) are permitted."
+        )
+
     existing = await get_user_by_email(email)
     if existing:
         raise HTTPException(status_code=400, detail="Email is already registered. Please sign in.")
@@ -374,7 +381,7 @@ async def register_user(payload: RegisterRequest, response: Response):
     user = await create_user(email=email, password=payload.password, name=payload.name, auth_provider="local")
     token = create_access_token(user["id"], user["email"], user["name"])
     set_auth_cookie(response, token)
-    await log_event("INFO", "AUTH", f"New user registered: {email} (Tenant ID: {user['id']})")
+    await log_event("INFO", "AUTH", f"New whitelisted user registered: {email}")
     return {
         "status": "success",
         "token": token,
@@ -389,6 +396,12 @@ async def register_user(payload: RegisterRequest, response: Response):
 @app.post("/api/auth/login")
 async def login_user(payload: LoginRequest, response: Response):
     email = payload.email.lower().strip()
+    if not is_email_authorized(email):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: Email '{email}' is not on the authorized whitelist. Only riddhesh.firake@gmail.com and acc94926@gmail.com may access this system."
+        )
+
     user = await get_user_by_email(email)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -416,24 +429,40 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
     name = payload.name or ""
     avatar = payload.avatar_url or ""
 
-    if payload.credential and not email:
+    if payload.credential:
         try:
-            import jwt as pyjwt
-            claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
-            email = claims.get("email", "").lower().strip()
-            name = claims.get("name", "")
-            avatar = claims.get("picture", "")
+            import urllib.request
+            tokeninfo_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={payload.credential}"
+            with urllib.request.urlopen(tokeninfo_url, timeout=5) as resp:
+                gdata = json.loads(resp.read().decode("utf-8"))
+                email = gdata.get("email", "").lower().strip()
+                name = gdata.get("name", name)
+                avatar = gdata.get("picture", avatar)
         except Exception:
-            pass
+            try:
+                import jwt as pyjwt
+                claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
+                email = claims.get("email", "").lower().strip()
+                name = claims.get("name", name)
+                avatar = claims.get("picture", avatar)
+            except Exception:
+                pass
 
     if not email:
-        email = f"trader_{uuid.uuid4().hex[:6]}@gmail.com"
-        name = name or "Google Trader"
+        raise HTTPException(status_code=400, detail="Missing Google email from OAuth payload.")
+
+    # STRICT SECURITY CHECK: Only allow whitelisted administrator emails
+    if not is_email_authorized(email):
+        await log_event("WARNING", "AUTH_DENIED", f"Unauthorized Google OAuth attempt blocked: {email}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: Google account '{email}' is not authorized. Access is strictly restricted to riddhesh.firake@gmail.com and acc94926@gmail.com."
+        )
 
     user = await get_user_by_email(email)
     if not user:
-        user = await create_user(email=email, password=None, name=name, auth_provider="google", avatar_url=avatar)
-        await log_event("INFO", "AUTH", f"New Google OAuth user created: {email}")
+        user = await create_user(email=email, password=None, name=name or email.split("@")[0], auth_provider="google", avatar_url=avatar)
+        await log_event("INFO", "AUTH", f"New whitelisted Google OAuth user authenticated: {email}")
 
     token = create_access_token(user["id"], user["email"], user["name"], auth_provider="google")
     set_auth_cookie(response, token)
@@ -450,24 +479,11 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
     }
 
 @app.post("/api/auth/demo")
-async def demo_guest_login(response: Response):
-    demo_email = "demo_trader@alphasignal.ai"
-    user = await get_user_by_email(demo_email)
-    if not user:
-        user = await create_user(email=demo_email, password="DemoTrader2026!", name="Demo Trader", auth_provider="demo")
-    
-    token = create_access_token(user["id"], user["email"], user["name"], auth_provider="demo")
-    set_auth_cookie(response, token)
-    return {
-        "status": "success",
-        "token": token,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "provider": "demo"
-        }
-    }
+async def demo_guest_login():
+    raise HTTPException(
+        status_code=403,
+        detail="Public demo guest access is disabled for live trading security. Only authorized Google accounts (riddhesh.firake@gmail.com, acc94926@gmail.com) may enter."
+    )
 
 @app.post("/api/auth/logout")
 async def logout_user(response: Response):
@@ -497,13 +513,14 @@ class SettingsUpdate(BaseModel):
     XM_AUTO_EXECUTION: Optional[str] = None
 
 @app.get("/api/settings")
-async def get_settings_endpoint(user: Optional[dict] = Depends(get_current_user_optional)):
+async def get_settings_endpoint(user: dict = Depends(get_current_authorized_user)):
     user_id = user["id"] if user else "default"
     current = await get_user_all_settings(user_id)
 
     return {
         "user_id": user_id,
-        "is_authenticated": bool(user),
+        "is_authenticated": True,
+        "user_email": user.get("email"),
         "AI_PROVIDER": current.get("AI_PROVIDER", settings.AI_PROVIDER),
         "GROQ_API_KEY_MASKED": mask_credential(current.get("GROQ_API_KEY", settings.GROQ_API_KEY)),
         "HAS_GROQ_KEY": bool(current.get("GROQ_API_KEY") or settings.GROQ_API_KEY),
@@ -526,7 +543,7 @@ async def get_settings_endpoint(user: Optional[dict] = Depends(get_current_user_
     }
 
 @app.post("/api/settings")
-async def update_settings_endpoint(payload: SettingsUpdate, user: Optional[dict] = Depends(get_current_user_optional)):
+async def update_settings_endpoint(payload: SettingsUpdate, user: dict = Depends(get_current_authorized_user)):
     user_id = user["id"] if user else "default"
     data = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None and v != ""}
     if data:
@@ -554,7 +571,7 @@ async def update_settings_endpoint(payload: SettingsUpdate, user: Optional[dict]
     return {"status": "updated", "user_id": user_id, "encrypted": True}
 
 @app.post("/api/telegram/start")
-async def start_telegram_listener():
+async def start_telegram_listener(user: dict = Depends(get_current_authorized_user)):
     stored = await get_all_settings()
     token = stored.get("TELEGRAM_BOT_TOKEN") or settings.TELEGRAM_BOT_TOKEN
     chan_id = stored.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
@@ -570,9 +587,9 @@ async def start_telegram_listener():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/telegram/dialogs")
-async def get_telegram_dialogs(user: Optional[dict] = Depends(get_current_user_optional)):
+async def get_telegram_dialogs(user: dict = Depends(get_current_authorized_user)):
     """Fetches user's actual joined Telegram channels and groups so they can select them from UI."""
-    user_id = user["id"] if user else "default"
+    user_id = user["id"]
     current = await get_user_all_settings(user_id)
     api_id = current.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
     api_hash = current.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
@@ -594,9 +611,9 @@ class ClientListenerStart(BaseModel):
 async def start_telegram_client_listener(
     payload: Optional[ClientListenerStart] = None,
     channel: Optional[str] = Query(None),
-    user: Optional[dict] = Depends(get_current_user_optional)
+    user: dict = Depends(get_current_authorized_user)
 ):
-    user_id = user["id"] if user else "default"
+    user_id = user["id"]
     current = await get_user_all_settings(user_id)
     api_id = current.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
     api_hash = current.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
@@ -623,12 +640,12 @@ async def start_telegram_client_listener(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/telegram/stop")
-async def stop_telegram_listener():
+async def stop_telegram_listener(user: dict = Depends(get_current_authorized_user)):
     await listener_manager.stop_listener()
     return {"status": "stopped"}
 
 @app.post("/api/clear")
-async def clear_data_endpoint():
+async def clear_data_endpoint(user: dict = Depends(get_current_authorized_user)):
     await clear_all_data()
     await log_event("INFO", "SYSTEM", "All signal logs, message history, and test records wiped clean.")
     return {"status": "cleared"}
@@ -646,7 +663,7 @@ async def get_xm_status_endpoint():
     return xm_executor.get_account_status()
 
 @app.post("/api/xm/config")
-async def update_xm_config_endpoint(payload: XMConfigUpdate):
+async def update_xm_config_endpoint(payload: XMConfigUpdate, user: dict = Depends(get_current_authorized_user)):
     if payload.login is not None:
         xm_executor.active_login = payload.login
         await set_setting("XM_MT5_LOGIN", str(payload.login))

@@ -1379,9 +1379,11 @@ function navigateTo(viewName, targetAnchor) {
 
 function handleDashboardAccess() {
   const user = getAuthUser();
-  if (user) {
+  const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+  if (user && user.email && allowed.includes(user.email.toLowerCase())) {
     navigateTo("dashboard");
   } else {
+    showToast("Authentication required. Please sign in with your authorized Google Account.", "warning");
     navigateTo("login");
   }
 }
@@ -1434,6 +1436,13 @@ async function checkAuthSession() {
     console.warn("Session check offline or tunnel not connected yet:", e.message);
   }
   const localUser = getAuthUser();
+  const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+  if (localUser && localUser.email && !allowed.includes(localUser.email.toLowerCase())) {
+    localStorage.removeItem("AUTH_USER");
+    localStorage.removeItem("AUTH_TOKEN");
+    updateUserUI(null);
+    return null;
+  }
   updateUserUI(localUser);
   return localUser;
 }
@@ -1538,15 +1547,34 @@ async function submitAuthForm() {
   }
 }
 
-async function handleGoogleSignIn() {
+async function handleGoogleSignIn(selectedEmail) {
   try {
-    const fakeGoogleEmail = `trader_${Math.floor(1000 + Math.random() * 9000)}@gmail.com`;
+    const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+    let emailToUse = selectedEmail;
+
+    if (!emailToUse) {
+      // Prompt user to select between their authorized accounts or enter email
+      const choice = prompt(
+        "Select your authorized Google Account:\n1. riddhesh.firake@gmail.com\n2. acc94926@gmail.com\n\nType 1 or 2 (or type your email):",
+        "1"
+      );
+      if (!choice) return;
+      if (choice.trim() === "1") emailToUse = "riddhesh.firake@gmail.com";
+      else if (choice.trim() === "2") emailToUse = "acc94926@gmail.com";
+      else emailToUse = choice.trim().toLowerCase();
+    }
+
+    if (!allowed.includes(emailToUse.toLowerCase())) {
+      showToast(`Access Denied: '${emailToUse}' is not an authorized administrator email.`, "error");
+      return;
+    }
+
     const res = await fetch("/api/auth/google", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: fakeGoogleEmail,
-        name: "Google Trader",
+        email: emailToUse,
+        name: emailToUse.split("@")[0],
         auth_provider: "google"
       })
     });
@@ -1555,7 +1583,7 @@ async function handleGoogleSignIn() {
       if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
       localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
       updateUserUI(data.user);
-      showToast("Signed in with Google OAuth successfully!", "success");
+      showToast(`Signed in as ${data.user.email} (Whitelisted Administrator)`, "success");
       navigateTo("dashboard");
     } else {
       showToast(data.detail || "Google OAuth failed.", "error");
@@ -1566,19 +1594,8 @@ async function handleGoogleSignIn() {
 }
 
 async function continueAsDemo() {
-  try {
-    const res = await fetch("/api/auth/demo", { method: "POST" });
-    const data = await res.json();
-    if (res.ok && data.user) {
-      if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
-      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-      updateUserUI(data.user);
-      showToast("1-Click Instant Demo Profile activated!", "success");
-      navigateTo("dashboard");
-    }
-  } catch (e) {
-    showToast("Demo sign-in error: " + e.message, "error");
-  }
+  showToast("Demo access is disabled. Please sign in with an authorized Google account (riddhesh.firake@gmail.com or acc94926@gmail.com).", "warning");
+  navigateTo("login");
 }
 
 async function logoutUser() {

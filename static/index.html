@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AlphaSignal AI — Telegram Trading Signal Intelligence & Execution Engine</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>α</text></svg>">
-  <link rel="stylesheet" href="./style.css?v=15">
+  <link rel="stylesheet" href="./style.css?v=16">
   <!-- Google Fonts — Inter for clean dashboard typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -70,9 +70,9 @@
           <i data-lucide="layout-dashboard"></i>
           Launch Live Dashboard
         </button>
-        <button class="btn btn-secondary btn-lg" onclick="continueAsDemo()">
-          <i data-lucide="zap" style="color: #fbbf24;"></i>
-          ⚡ 1-Click Instant Demo
+        <button class="btn btn-secondary btn-lg" onclick="navigateTo('login')">
+          <i data-lucide="shield-check" style="color: #38bdf8;"></i>
+          Authorized Sign In &rarr;
         </button>
       </div>
 
@@ -212,9 +212,18 @@
           </button>
         </div>
 
+        <!-- Whitelisted Security Notice -->
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 10px; margin-bottom: 1rem; font-size: 0.76rem; color: #38bdf8; line-height: 1.4;">
+          <div style="font-weight: 700; display: flex; align-items: center; gap: 5px; margin-bottom: 4px;">
+            <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
+            Restricted Admin Trading Vault
+          </div>
+          Only authorized Google accounts are permitted. All others are blocked.
+        </div>
+
         <!-- Google OAuth Button -->
         <button class="btn w-full" onclick="handleGoogleSignIn()"
-          style="display: flex; align-items: center; justify-content: center; gap: 10px; background: #ffffff; color: #1e293b; font-weight: 600; border: none; padding: 0.7rem; border-radius: 8px; margin-bottom: 1rem; transition: all 0.2s;">
+          style="display: flex; align-items: center; justify-content: center; gap: 10px; background: #ffffff; color: #1e293b; font-weight: 600; border: none; padding: 0.7rem; border-radius: 8px; margin-bottom: 0.75rem; transition: all 0.2s;">
           <svg style="width: 18px; height: 18px;" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
             <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -223,6 +232,18 @@
           </svg>
           Continue with Google
         </button>
+
+        <!-- Quick 1-Click Authorized Sign In Pills -->
+        <div style="display: flex; gap: 6px; margin-bottom: 1rem;">
+          <button class="btn btn-secondary" onclick="handleGoogleSignIn('riddhesh.firake@gmail.com')"
+            style="flex: 1; font-size: 0.72rem; padding: 6px 4px; justify-content: center; background: rgba(30, 41, 59, 0.7);">
+            👤 riddhesh.firake
+          </button>
+          <button class="btn btn-secondary" onclick="handleGoogleSignIn('acc94926@gmail.com')"
+            style="flex: 1; font-size: 0.72rem; padding: 6px 4px; justify-content: center; background: rgba(30, 41, 59, 0.7);">
+            👤 acc94926
+          </button>
+        </div>
 
         <div style="display: flex; align-items: center; margin: 1rem 0; color: var(--text-dim); font-size: 0.75rem;">
           <div style="flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1);"></div>
@@ -784,7 +805,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=15"></script>
+  <script src="./app.js?v=16"></script>
 </body>
 
 </html>
