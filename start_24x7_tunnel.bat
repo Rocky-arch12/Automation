@@ -12,13 +12,11 @@ start "AlphaSignal Server" cmd /k "python -m uvicorn main:app --host 127.0.0.1 -
 REM Wait 3 seconds for server to initialize
 timeout /t 3 /nobreak >nul
 
-REM 2. Start Permanent Ngrok Tunnel with Edge Google OAuth Whitelist
+REM 2. Start Permanent Ngrok Tunnel
 echo ===================================================
 echo   Starting Permanent 24x7 Ngrok Tunnel:
 echo   https://plod-exonerate-october.ngrok-free.dev
-echo   Protected by Google OAuth:
-echo   riddhesh.firake@gmail.com, acc94926@gmail.com
 echo ===================================================
-.\ngrok.exe http --url=https://plod-exonerate-october.ngrok-free.dev 8000 --oauth=google --oauth-allow-email=riddhesh.firake@gmail.com,acc94926@gmail.com
+.\ngrok.exe http --url=https://plod-exonerate-october.ngrok-free.dev 8000
 
 pause

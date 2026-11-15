@@ -47,28 +47,6 @@ function getApiUrl(endpoint) {
   return endpoint.startsWith("/") ? `${cleanBase}${endpoint}` : `${cleanBase}/${endpoint}`;
 }
 
-// Global fetch interceptor:
-// 1. Automatically routes relative /api calls to getApiUrl() when running on remote frontend (e.g. Vercel)
-// 2. Injects 'ngrok-skip-browser-warning': 'true' so ngrok free tier never serves interstitial pages
-const _nativeFetch = window.fetch;
-window.fetch = function (resource, init = {}) {
-  let url = resource;
-  if (typeof resource === "string" && resource.startsWith("/api")) {
-    url = getApiUrl(resource);
-  }
-  init = init || {};
-  let headers = init.headers;
-  if (!headers) {
-    headers = { "ngrok-skip-browser-warning": "true" };
-  } else if (headers instanceof Headers) {
-    headers.set("ngrok-skip-browser-warning", "true");
-  } else if (typeof headers === "object") {
-    headers["ngrok-skip-browser-warning"] = "true";
-  }
-  init.headers = headers;
-  return _nativeFetch.call(this, url, init);
-};
-
 function getAuthToken() {
   return localStorage.getItem("AUTH_TOKEN") || "";
 }
@@ -82,28 +60,40 @@ function getAuthUser() {
 }
 
 // Auto-route all /api and /uploads calls to remote backend if API_BASE is configured (e.g. on Vercel)
-const _origFetch = window.fetch;
-window.fetch = function (url, options) {
+// Injects Authorization header and 'ngrok-skip-browser-warning': 'true'
+const _nativeFetch = window.fetch;
+window.fetch = function (url, options = {}) {
+  let targetUrl = url;
   if (typeof url === "string" && (url.startsWith("/api") || url.startsWith("/uploads"))) {
-    // Attach JWT Authorization Header and HttpOnly cookie support
+    targetUrl = getApiUrl(url);
     options = options || {};
     options.credentials = "include";
-    options.headers = options.headers || {};
-    const token = getAuthToken();
-    if (token) {
-      if (options.headers instanceof Headers) {
-        if (!options.headers.has("Authorization")) {
-          options.headers.set("Authorization", `Bearer ${token}`);
-        }
-      } else {
-        if (!options.headers["Authorization"]) {
-          options.headers["Authorization"] = `Bearer ${token}`;
-        }
+    
+    // Normalize headers
+    let headers = options.headers;
+    if (!headers) {
+      headers = {};
+    }
+    
+    if (headers instanceof Headers) {
+      if (!headers.has("ngrok-skip-browser-warning")) {
+        headers.set("ngrok-skip-browser-warning", "true");
+      }
+      const token = getAuthToken();
+      if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+    } else {
+      headers["ngrok-skip-browser-warning"] = "true";
+      const token = getAuthToken();
+      if (token && !headers["Authorization"]) {
+        headers["Authorization"] = `Bearer ${token}`;
       }
     }
+    options.headers = headers;
 
-    return _origFetch(getApiUrl(url), options).then(res => {
-      if (res.status === 401 && !url.includes("/api/auth/login") && !url.includes("/api/auth/register")) {
+    return _nativeFetch.call(this, targetUrl, options).then(res => {
+      if (res.status === 401 && !url.includes("/api/auth/login") && !url.includes("/api/auth/register") && !url.includes("/api/auth/google")) {
         const wasUser = getAuthUser();
         if (wasUser) {
           localStorage.removeItem("AUTH_USER");
@@ -120,14 +110,16 @@ window.fetch = function (url, options) {
       if (err.message && err.message.includes("Failed to fetch")) {
         const currentBase = getApiBase();
         console.error("Backend fetch failed for endpoint:", url, "Target base:", currentBase);
-        if (window.location.hostname.includes("vercel.app")) {
-          showToast(`Engine connection failed (${currentBase || 'missing'}). Click 'Settings' to update your Cloudflare Tunnel URL.`, "error");
+        if (window.location.hostname.includes("vercel.app") && !window._tunnelToastShown) {
+          window._tunnelToastShown = true;
+          setTimeout(() => { window._tunnelToastShown = false; }, 10000);
+          showToast(`Connecting to backend (${currentBase})...`, "info");
         }
       }
       throw err;
     });
   }
-  return _origFetch(url, options);
+  return _nativeFetch.call(this, targetUrl, options);
 };
 
 let currentFilter = "ALL";

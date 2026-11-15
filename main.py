@@ -148,12 +148,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AlphaSignal AI", lifespan=lifespan)
 
+# Robust CORS Configuration: explicitly whitelist Vercel and local origins
+allowed_origins = [
+    "https://automation-static-tyzj.vercel.app",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "https://plod-exonerate-october.ngrok-free.dev"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Mount Uploads & Sample Signals directories
