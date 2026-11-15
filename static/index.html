@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AlphaSignal AI — Telegram Trading Signal Intelligence & Execution Engine</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>α</text></svg>">
-  <link rel="stylesheet" href="./style.css?v=19">
+  <link rel="stylesheet" href="./style.css?v=20">
   <!-- Google Fonts — Inter for clean dashboard typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -44,12 +44,9 @@
           <i data-lucide="settings" style="width: 14px; height: 14px;"></i>
           Settings
         </button>
-        <button class="btn btn-secondary" onclick="navigateTo('login')">
-          <i data-lucide="log-in" style="width: 14px; height: 14px;"></i>
-          Sign In
-        </button>
-        <button class="btn btn-primary" onclick="navigateTo('register')">
-          Get Started Free &rarr;
+        <button class="btn btn-primary" onclick="navigateTo('login')">
+          <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
+          Admin Access &rarr;
         </button>
       </div>
     </nav>
@@ -176,8 +173,7 @@
       <div style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
         <div>&copy; 2026 AlphaSignal AI. Built for institutional-grade autonomous execution.</div>
         <div style="display: flex; gap: 1.5rem;">
-          <a href="#" onclick="continueAsDemo()" style="color: #60a5fa; text-decoration: none;">Live Demo</a>
-          <a href="#" onclick="navigateTo('login')" style="color: #60a5fa; text-decoration: none;">Trader Login</a>
+          <a href="#" onclick="navigateTo('login')" style="color: #60a5fa; text-decoration: none;">Admin Access</a>
         </div>
       </div>
     </footer>
@@ -198,97 +194,84 @@
         </div>
 
         <div style="text-align: center; margin-bottom: 1.5rem;">
-          <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 4px;" id="auth-view-title">Sign In to AlphaSignal</h2>
-          <p style="font-size: 0.8rem; color: var(--text-dim);" id="auth-view-subtitle">Access your isolated trading dashboard & execution vault</p>
-        </div>
-
-        <!-- Auth Tabs: Sign In / Create Account -->
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem; background: rgba(15, 23, 42, 0.6); padding: 4px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.08);">
-          <button class="btn w-full" id="auth-tab-login" onclick="switchAuthTab('login')"
-            style="flex: 1; padding: 0.5rem; font-size: 0.85rem; border-radius: 8px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); justify-content: center;">
-            Sign In
-          </button>
-          <button class="btn w-full" id="auth-tab-register" onclick="switchAuthTab('register')"
-            style="flex: 1; padding: 0.5rem; font-size: 0.85rem; border-radius: 8px; background: transparent; color: var(--text-dim); border: 1px solid transparent; justify-content: center;">
-            Create Account
-          </button>
+          <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 4px;" id="auth-view-title">Admin Access Vault</h2>
+          <p style="font-size: 0.8rem; color: var(--text-dim);" id="auth-view-subtitle">Restricted to authorized administrator Google accounts</p>
         </div>
 
         <!-- Whitelisted Security Notice -->
-        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 10px; margin-bottom: 1rem; font-size: 0.76rem; color: #38bdf8; line-height: 1.4;">
-          <div style="font-weight: 700; display: flex; align-items: center; gap: 5px; margin-bottom: 4px;">
-            <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
-            Restricted Admin Trading Vault
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 12px; margin-bottom: 1.25rem; font-size: 0.78rem; color: #38bdf8; line-height: 1.45;">
+          <div style="font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: #67e8f9;">
+            <i data-lucide="shield-check" style="width: 15px; height: 15px;"></i>
+            Whitelisted Admin Vault Only
           </div>
-          Only authorized Google accounts are permitted. All others are blocked.
+          Manual passwords and public registrations are permanently disabled. Authentication is strictly restricted to the authorized administrator accounts below.
         </div>
 
-        <!-- Official Google OAuth Button (Redirects directly to accounts.google.com) -->
-        <div id="g_id_signin_container" style="display: flex; justify-content: center; margin-bottom: 0.75rem; width: 100%;"></div>
+        <!-- Authorized Accounts Selection -->
+        <div style="margin-bottom: 1.25rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 8px; font-weight: 600;">
+            Select Authorized Administrator:
+          </div>
+
+          <!-- Account 1: riddhesh.firake@gmail.com -->
+          <button type="button" class="admin-account-card w-full" onclick="loginAuthorizedAdmin('riddhesh.firake@gmail.com')"
+            style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; text-align: left; width: 100%;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #0284c7, #38bdf8); display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 1rem; box-shadow: 0 0 12px rgba(56, 189, 248, 0.4); flex-shrink: 0;">
+                R
+              </div>
+              <div style="overflow: hidden;">
+                <div style="font-weight: 700; color: #ffffff; font-size: 0.88rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                  <span>riddhesh.firake@gmail.com</span>
+                  <span style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 0.65rem; padding: 2px 6px; border-radius: 9999px; font-weight: 700; border: 1px solid rgba(16, 185, 129, 0.4);">Verified Admin</span>
+                </div>
+                <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 2px;">
+                  1-Click Instant Login &bull; Full Execution Vault
+                </div>
+              </div>
+            </div>
+            <div style="color: #38bdf8; font-size: 1.2rem; font-weight: 700; flex-shrink: 0;">&rarr;</div>
+          </button>
+
+          <!-- Account 2: acc94926@gmail.com -->
+          <button type="button" class="admin-account-card w-full" onclick="loginAuthorizedAdmin('acc94926@gmail.com')"
+            style="display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; text-align: left; width: 100%;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #7c3aed, #a78bfa); display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 1rem; box-shadow: 0 0 12px rgba(167, 139, 250, 0.4); flex-shrink: 0;">
+                A
+              </div>
+              <div style="overflow: hidden;">
+                <div style="font-weight: 700; color: #ffffff; font-size: 0.88rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                  <span>acc94926@gmail.com</span>
+                  <span style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 0.65rem; padding: 2px 6px; border-radius: 9999px; font-weight: 700; border: 1px solid rgba(16, 185, 129, 0.4);">Verified Admin</span>
+                </div>
+                <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 2px;">
+                  1-Click Instant Login &bull; Full Execution Vault
+                </div>
+              </div>
+            </div>
+            <div style="color: #a78bfa; font-size: 1.2rem; font-weight: 700; flex-shrink: 0;">&rarr;</div>
+          </button>
+        </div>
+
+        <!-- Google OAuth SSO Flow -->
+        <div style="display: flex; align-items: center; margin: 1rem 0 0.85rem 0; color: var(--text-dim); font-size: 0.72rem;">
+          <div style="flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1);"></div>
+          <span style="padding: 0 8px;">or authenticate via Google OAuth</span>
+          <div style="flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1);"></div>
+        </div>
+
+        <div id="g_id_signin_container" style="display: flex; justify-content: center; margin-bottom: 0.5rem; width: 100%;"></div>
         <button class="btn w-full" id="google-direct-auth-btn" onclick="triggerGoogleOAuthRedirect()"
-          style="display: flex; align-items: center; justify-content: center; gap: 10px; background: #ffffff; color: #1e293b; font-weight: 600; border: none; padding: 0.75rem; border-radius: 8px; margin-bottom: 0.75rem; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
-          <svg style="width: 18px; height: 18px;" viewBox="0 0 24 24">
+          style="display: flex; align-items: center; justify-content: center; gap: 10px; background: #ffffff; color: #1e293b; font-weight: 600; border: none; padding: 0.65rem; border-radius: 8px; margin-bottom: 0.5rem; font-size: 0.82rem; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+          <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
             <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
             <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
           </svg>
-          Sign in with Google
+          Google Cloud Single Sign-On
         </button>
-        <a href="javascript:void(0)" onclick="promptGoogleClientIdConfig()"
-          style="font-size: 0.72rem; color: #a78bfa; display: block; text-align: center; margin-bottom: 0.75rem; text-decoration: underline;">
-          ⚙️ Set Google OAuth Client ID
-        </a>
-
-        <!-- Fast Admin Bypass for Verified Whitelist -->
-        <div style="display: flex; gap: 6px; margin-bottom: 1rem;">
-          <button class="btn btn-secondary" onclick="fastAdminLogin('riddhesh.firake@gmail.com')"
-            style="flex: 1; font-size: 0.72rem; padding: 6px 4px; justify-content: center; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.1);">
-            ⚡ riddhesh.firake
-          </button>
-          <button class="btn btn-secondary" onclick="fastAdminLogin('acc94926@gmail.com')"
-            style="flex: 1; font-size: 0.72rem; padding: 6px 4px; justify-content: center; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.1);">
-            ⚡ acc94926
-          </button>
-        </div>
-
-        <div style="display: flex; align-items: center; margin: 1rem 0; color: var(--text-dim); font-size: 0.75rem;">
-          <div style="flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1);"></div>
-          <span style="padding: 0 10px;">or with email credentials</span>
-          <div style="flex: 1; height: 1px; background: rgba(255, 255, 255, 0.1);"></div>
-        </div>
-
-        <!-- Registration Name Field (hidden on login tab) -->
-        <div class="form-group" id="auth-name-group" style="display: none; margin-bottom: 0.85rem;">
-          <label style="font-size: 0.78rem; color: var(--text-dim); margin-bottom: 4px; display: block;">Trader Name</label>
-          <input type="text" id="auth-name" class="form-control" placeholder="e.g. Satoshi Trader">
-        </div>
-
-        <!-- Email Field -->
-        <div class="form-group" style="margin-bottom: 0.85rem;">
-          <label style="font-size: 0.78rem; color: var(--text-dim); margin-bottom: 4px; display: block;">Email Address</label>
-          <input type="email" id="auth-email" class="form-control" placeholder="trader@domain.com">
-        </div>
-
-        <!-- Password Field -->
-        <div class="form-group" style="margin-bottom: 1.1rem;">
-          <label style="font-size: 0.78rem; color: var(--text-dim); margin-bottom: 4px; display: block;">Password</label>
-          <input type="password" id="auth-password" class="form-control" placeholder="••••••••••••">
-        </div>
-
-        <!-- Submit Button -->
-        <button class="btn btn-primary w-full" id="auth-submit-btn" onclick="submitAuthForm()"
-          style="padding: 0.75rem; font-weight: 700; font-size: 0.9rem; justify-content: center;">
-          Sign In
-        </button>
-
-        <!-- 1-Click Instant Demo Access -->
-        <div style="margin-top: 1rem;">
-          <button class="btn btn-secondary w-full" onclick="continueAsDemo()"
-            style="font-size: 0.8rem; border-color: rgba(96, 165, 250, 0.4); color: #93c5fd; justify-content: center; padding: 0.6rem;">
-            ⚡ 1-Click Demo Access (Instant Sandbox)
-          </button>
-        </div>
 
         <!-- Backend Engine Settings Link -->
         <div style="margin-top: 0.75rem; text-align: center;">
@@ -299,8 +282,8 @@
         </div>
 
         <!-- Encryption & Security Footnote -->
-        <div style="margin-top: 1.25rem; padding: 0.75rem; border-radius: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); font-size: 0.72rem; color: #a7f3d0; line-height: 1.45;">
-          🔒 <b>Zero-Knowledge Security</b>: All settings, MT5 credentials, and Telegram tokens are AES-256 encrypted at rest. Sessions are persisted with secure HttpOnly cookies.
+        <div style="margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); font-size: 0.72rem; color: #a7f3d0; line-height: 1.45;">
+          🔒 <b>Zero-Knowledge Security</b>: Only <code>riddhesh.firake@gmail.com</code> and <code>acc94926@gmail.com</code> are permitted to execute trades or configure keys. All credentials are AES-256 encrypted at rest.
         </div>
       </div>
     </div>
@@ -812,7 +795,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=19"></script>
+  <script src="./app.js?v=20"></script>
 </body>
 
 </html>

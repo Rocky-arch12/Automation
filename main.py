@@ -372,67 +372,18 @@ class GoogleAuthRequest(BaseModel):
     avatar_url: Optional[str] = None
 
 @app.post("/api/auth/register")
-async def register_user(payload: RegisterRequest, response: Response):
-    email = payload.email.lower().strip()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Invalid email address.")
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-    
-    if not is_email_authorized(email):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access Denied: Email '{email}' is not on the authorized whitelist. Only whitelisted administrators (riddhesh.firake@gmail.com, acc94926@gmail.com) are permitted."
-        )
-
-    existing = await get_user_by_email(email)
-    if existing:
-        raise HTTPException(status_code=400, detail="Email is already registered. Please sign in.")
-    
-    user = await create_user(email=email, password=payload.password, name=payload.name, auth_provider="local")
-    token = create_access_token(user["id"], user["email"], user["name"])
-    set_auth_cookie(response, token)
-    await log_event("INFO", "AUTH", f"New whitelisted user registered: {email}")
-    return {
-        "status": "success",
-        "token": token,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "provider": user["auth_provider"]
-        }
-    }
+async def register_user():
+    raise HTTPException(
+        status_code=403,
+        detail="Public account registration is disabled. This system is strictly locked to whitelisted administrator accounts (riddhesh.firake@gmail.com, acc94926@gmail.com)."
+    )
 
 @app.post("/api/auth/login")
-async def login_user(payload: LoginRequest, response: Response):
-    email = payload.email.lower().strip()
-    if not is_email_authorized(email):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access Denied: Email '{email}' is not on the authorized whitelist. Only riddhesh.firake@gmail.com and acc94926@gmail.com may access this system."
-        )
-
-    user = await get_user_by_email(email)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    
-    if not verify_password(payload.password, user.get("password_hash", "")):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    
-    token = create_access_token(user["id"], user["email"], user["name"], auth_provider=user.get("auth_provider", "local"))
-    set_auth_cookie(response, token)
-    await log_event("INFO", "AUTH", f"User signed in: {email}")
-    return {
-        "status": "success",
-        "token": token,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "provider": user.get("auth_provider", "local")
-        }
-    }
+async def login_user():
+    raise HTTPException(
+        status_code=403,
+        detail="Manual email/password authentication is disabled. Please authenticate via your whitelisted administrator account."
+    )
 
 @app.post("/api/auth/google")
 async def google_oauth_login(payload: GoogleAuthRequest, response: Response):

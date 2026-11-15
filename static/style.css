@@ -1849,6 +1849,22 @@ pre.code-json {
   backdrop-filter: blur(20px);
 }
 
+.admin-account-card {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+}
+
+.admin-account-card:hover {
+  transform: translateY(-2px);
+  border-color: #38bdf8 !important;
+  box-shadow: 0 8px 24px rgba(56, 189, 248, 0.25);
+  background: rgba(30, 41, 59, 0.98) !important;
+}
+
+.admin-account-card:active {
+  transform: translateY(0);
+}
+
 /* Telegram Dialog Harvester Picker */
 .dialogs-picker-container {
   background: rgba(15, 23, 42, 0.7);

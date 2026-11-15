@@ -1326,19 +1326,17 @@ function navigateTo(viewName, targetAnchor) {
 
   if (!landingView || !loginView || !dashboardView) return;
 
-  // Handle register alias
+  // Handle register alias (permanently disabled, routes directly to login)
   if (viewName === "register") {
-    switchAuthTab("register");
     viewName = "login";
-  } else if (viewName === "login") {
-    switchAuthTab("login");
   }
 
   // Protected Route Guard for Dashboard
   if (viewName === "dashboard") {
     const user = getAuthUser();
-    if (!user) {
-      showToast("Access Restricted: Please sign in or use 1-Click Demo to launch your dashboard.", "info");
+    const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+    if (!user || !user.email || !allowed.includes(user.email.toLowerCase())) {
+      showToast("Access Restricted: Please select your authorized administrator account to enter.", "warning");
       navigateTo("login");
       return;
     }
@@ -1468,87 +1466,12 @@ function initAuthUI() {
 }
 
 function switchAuthTab(tab) {
-  currentAuthTab = tab;
-  const tabLogin = document.getElementById("auth-tab-login");
-  const tabRegister = document.getElementById("auth-tab-register");
-  const nameGroup = document.getElementById("auth-name-group");
-  const submitBtn = document.getElementById("auth-submit-btn");
-  const viewTitle = document.getElementById("auth-view-title");
-  const viewSubtitle = document.getElementById("auth-view-subtitle");
-
-  if (tab === "register") {
-    if (tabLogin) {
-      tabLogin.style.background = "transparent";
-      tabLogin.style.color = "var(--text-dim)";
-      tabLogin.style.borderColor = "transparent";
-    }
-    if (tabRegister) {
-      tabRegister.style.background = "rgba(56, 189, 248, 0.15)";
-      tabRegister.style.color = "#38bdf8";
-      tabRegister.style.borderColor = "rgba(56, 189, 248, 0.3)";
-    }
-    if (nameGroup) nameGroup.style.display = "block";
-    if (submitBtn) submitBtn.innerText = "Create Isolated Account";
-    if (viewTitle) viewTitle.innerText = "Create Your Trader Account";
-    if (viewSubtitle) viewSubtitle.innerText = "Get a dedicated, isolated execution sandbox with AES-256 encryption";
-  } else {
-    if (tabRegister) {
-      tabRegister.style.background = "transparent";
-      tabRegister.style.color = "var(--text-dim)";
-      tabRegister.style.borderColor = "transparent";
-    }
-    if (tabLogin) {
-      tabLogin.style.background = "rgba(56, 189, 248, 0.15)";
-      tabLogin.style.color = "#38bdf8";
-      tabLogin.style.borderColor = "rgba(56, 189, 248, 0.3)";
-    }
-    if (nameGroup) nameGroup.style.display = "none";
-    if (submitBtn) submitBtn.innerText = "Sign In";
-    if (viewTitle) viewTitle.innerText = "Sign In to AlphaSignal";
-    if (viewSubtitle) viewSubtitle.innerText = "Access your isolated trading dashboard & execution vault";
-  }
+  // Manual registration removed. Route directly to login.
+  navigateTo("login");
 }
 
 async function submitAuthForm() {
-  const email = (document.getElementById("auth-email").value || "").trim();
-  const password = (document.getElementById("auth-password").value || "").trim();
-  const name = (document.getElementById("auth-name") ? document.getElementById("auth-name").value : "").trim();
-
-  if (!email || !email.includes("@")) {
-    showToast("Please enter a valid email address.", "error");
-    return;
-  }
-  if (!password || password.length < 6) {
-    showToast("Password must be at least 6 characters.", "error");
-    return;
-  }
-
-  const endpoint = currentAuthTab === "register" ? "/api/auth/register" : "/api/auth/login";
-  const payload = { email, password };
-  if (currentAuthTab === "register") payload.name = name;
-
-  try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      showToast(data.detail || "Authentication failed.", "error");
-      return;
-    }
-
-    if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
-    if (data.user) localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-
-    updateUserUI(data.user);
-    showToast(`Welcome back, ${data.user.name || data.user.email}! Profile isolated & encrypted.`, "success");
-    navigateTo("dashboard");
-  } catch (e) {
-    showToast("Authentication error: " + e.message, "error");
-  }
+  showToast("Manual email/password login is permanently disabled. Please click your authorized administrator account to enter.", "warning");
 }
 
 // ============================================================
@@ -1638,15 +1561,23 @@ function promptGoogleClientIdConfig() {
   }
 }
 
-async function fastAdminLogin(email) {
+async function loginAuthorizedAdmin(email) {
+  const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+  const cleanEmail = (email || "").toLowerCase().trim();
+
+  if (!allowed.includes(cleanEmail)) {
+    showToast(`Access Denied: '${cleanEmail}' is not an authorized administrator.`, "error");
+    return;
+  }
+
   try {
-    showToast(`Authenticating authorized administrator: ${email}...`, "info");
+    showToast(`Authenticating administrator: ${cleanEmail}...`, "info");
     const res = await fetch("/api/auth/google", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: email,
-        name: email.split("@")[0],
+        email: cleanEmail,
+        name: cleanEmail.split("@")[0],
         auth_provider: "google"
       })
     });
@@ -1655,14 +1586,18 @@ async function fastAdminLogin(email) {
       if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
       localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
       updateUserUI(data.user);
-      showToast(`Welcome back, ${data.user.email}! (Admin Verified)`, "success");
+      showToast(`Welcome back, ${data.user.email}! (Admin Access Verified)`, "success");
       navigateTo("dashboard");
     } else {
-      showToast(data.detail || "Authentication rejected.", "error");
+      showToast(data.detail || "Authentication rejected by security policy.", "error");
     }
   } catch (e) {
-    showToast("Login error: " + e.message, "error");
+    showToast("Login connection error: " + e.message, "error");
   }
+}
+
+function fastAdminLogin(email) {
+  return loginAuthorizedAdmin(email);
 }
 
 // 2. Handle Google Credential Callback from Google Identity Services
