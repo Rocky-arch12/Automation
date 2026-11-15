@@ -5,7 +5,7 @@ import uuid
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException, Depends, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException, Depends, Header, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +16,8 @@ from auth import (
     create_access_token, decode_access_token,
     get_current_user, get_current_user_optional,
     mask_credential, hash_password, verify_password,
-    encrypt_credential, decrypt_credential
+    encrypt_credential, decrypt_credential,
+    set_auth_cookie, clear_auth_cookie
 )
 from database import (
     init_db, get_messages, get_stats, get_logs,
@@ -127,13 +128,7 @@ app = FastAPI(title="AlphaSignal AI", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "https://automation-static-tyzj.vercel.app",
-        "*"
-    ],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -323,7 +318,7 @@ class GoogleAuthRequest(BaseModel):
     avatar_url: Optional[str] = None
 
 @app.post("/api/auth/register")
-async def register_user(payload: RegisterRequest):
+async def register_user(payload: RegisterRequest, response: Response):
     email = payload.email.lower().strip()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email address.")
@@ -336,6 +331,7 @@ async def register_user(payload: RegisterRequest):
     
     user = await create_user(email=email, password=payload.password, name=payload.name, auth_provider="local")
     token = create_access_token(user["id"], user["email"], user["name"])
+    set_auth_cookie(response, token)
     await log_event("INFO", "AUTH", f"New user registered: {email} (Tenant ID: {user['id']})")
     return {
         "status": "success",
@@ -349,7 +345,7 @@ async def register_user(payload: RegisterRequest):
     }
 
 @app.post("/api/auth/login")
-async def login_user(payload: LoginRequest):
+async def login_user(payload: LoginRequest, response: Response):
     email = payload.email.lower().strip()
     user = await get_user_by_email(email)
     if not user:
@@ -359,6 +355,7 @@ async def login_user(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     
     token = create_access_token(user["id"], user["email"], user["name"], auth_provider=user.get("auth_provider", "local"))
+    set_auth_cookie(response, token)
     await log_event("INFO", "AUTH", f"User signed in: {email}")
     return {
         "status": "success",
@@ -372,7 +369,7 @@ async def login_user(payload: LoginRequest):
     }
 
 @app.post("/api/auth/google")
-async def google_oauth_login(payload: GoogleAuthRequest):
+async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
     email = (payload.email or "").lower().strip()
     name = payload.name or ""
     avatar = payload.avatar_url or ""
@@ -397,6 +394,7 @@ async def google_oauth_login(payload: GoogleAuthRequest):
         await log_event("INFO", "AUTH", f"New Google OAuth user created: {email}")
 
     token = create_access_token(user["id"], user["email"], user["name"], auth_provider="google")
+    set_auth_cookie(response, token)
     return {
         "status": "success",
         "token": token,
@@ -410,13 +408,14 @@ async def google_oauth_login(payload: GoogleAuthRequest):
     }
 
 @app.post("/api/auth/demo")
-async def demo_guest_login():
+async def demo_guest_login(response: Response):
     demo_email = "demo_trader@alphasignal.ai"
     user = await get_user_by_email(demo_email)
     if not user:
         user = await create_user(email=demo_email, password="DemoTrader2026!", name="Demo Trader", auth_provider="demo")
     
     token = create_access_token(user["id"], user["email"], user["name"], auth_provider="demo")
+    set_auth_cookie(response, token)
     return {
         "status": "success",
         "token": token,
@@ -427,6 +426,11 @@ async def demo_guest_login():
             "provider": "demo"
         }
     }
+
+@app.post("/api/auth/logout")
+async def logout_user(response: Response):
+    clear_auth_cookie(response)
+    return {"status": "logged_out"}
 
 @app.get("/api/auth/me")
 async def get_current_user_profile(user: dict = Depends(get_current_user)):
@@ -441,6 +445,10 @@ class SettingsUpdate(BaseModel):
     GEMINI_MODEL: Optional[str] = None
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_CHANNEL_ID: Optional[str] = None
+    TELEGRAM_API_ID: Optional[str] = None
+    TELEGRAM_API_HASH: Optional[str] = None
+    TELEGRAM_PHONE: Optional[str] = None
+    TELEGRAM_SELECTED_CHANNELS: Optional[str] = None
     XM_MT5_LOGIN: Optional[str] = None
     XM_MT5_PASSWORD: Optional[str] = None
     XM_MT5_SERVER: Optional[str] = None
@@ -465,6 +473,11 @@ async def get_settings_endpoint(user: Optional[dict] = Depends(get_current_user_
         "TELEGRAM_BOT_TOKEN_MASKED": mask_credential(current.get("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN)),
         "HAS_BOT_TOKEN": bool(current.get("TELEGRAM_BOT_TOKEN") or settings.TELEGRAM_BOT_TOKEN),
         "TELEGRAM_CHANNEL_ID": current.get("TELEGRAM_CHANNEL_ID", settings.TELEGRAM_CHANNEL_ID),
+        "TELEGRAM_API_ID": current.get("TELEGRAM_API_ID", str(settings.TELEGRAM_API_ID) if settings.TELEGRAM_API_ID else ""),
+        "TELEGRAM_API_HASH_MASKED": mask_credential(current.get("TELEGRAM_API_HASH", settings.TELEGRAM_API_HASH)),
+        "HAS_TELEGRAM_HASH": bool(current.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH),
+        "TELEGRAM_PHONE": current.get("TELEGRAM_PHONE", settings.TELEGRAM_PHONE),
+        "TELEGRAM_SELECTED_CHANNELS": current.get("TELEGRAM_SELECTED_CHANNELS", ""),
         "XM_MT5_LOGIN": current.get("XM_MT5_LOGIN", str(settings.XM_MT5_LOGIN)),
         "XM_MT5_SERVER": current.get("XM_MT5_SERVER", settings.XM_MT5_SERVER),
         "XM_AUTO_EXECUTION": current.get("XM_AUTO_EXECUTION", "true" if settings.XM_AUTO_EXECUTION else "false"),
@@ -480,21 +493,20 @@ async def update_settings_endpoint(payload: SettingsUpdate, user: Optional[dict]
             for field, val in data.items():
                 setattr(settings, field, val)
 
-    # In-memory XM executor updates for main desktop worker instance
-    if user_id == "default":
-        if "XM_MT5_LOGIN" in data:
-            try:
-                xm_executor.active_login = int(data["XM_MT5_LOGIN"])
-            except Exception:
-                pass
-        if "XM_MT5_SERVER" in data:
-            xm_executor.active_server = str(data["XM_MT5_SERVER"])
-        if "XM_MT5_PASSWORD" in data:
-            xm_executor.active_password = str(data["XM_MT5_PASSWORD"])
-        if "XM_AUTO_EXECUTION" in data:
-            xm_executor.auto_execution_enabled = str(data["XM_AUTO_EXECUTION"]).lower() in ["true", "1", "yes"]
+    # In-memory XM executor updates
+    if "XM_MT5_LOGIN" in data:
+        try:
+            xm_executor.active_login = int(data["XM_MT5_LOGIN"])
+        except Exception:
+            pass
+    if "XM_MT5_SERVER" in data:
+        xm_executor.active_server = str(data["XM_MT5_SERVER"])
+    if "XM_MT5_PASSWORD" in data:
+        xm_executor.active_password = str(data["XM_MT5_PASSWORD"])
+    if "XM_AUTO_EXECUTION" in data:
+        xm_executor.auto_execution_enabled = str(data["XM_AUTO_EXECUTION"]).lower() in ["true", "1", "yes"]
 
-        asyncio.create_task(xm_executor.initialize())
+    asyncio.create_task(xm_executor.initialize())
 
     await log_event("INFO", "SYSTEM", f"Configuration updated for user {user_id} (AES-256 encrypted at rest).")
     return {"status": "updated", "user_id": user_id, "encrypted": True}
@@ -515,11 +527,55 @@ async def start_telegram_listener():
         await log_event("ERROR", "TELEGRAM", f"Failed to start bot listener: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/telegram/start_client")
-async def start_telegram_client_listener(channel: Optional[str] = Query(None)):
+@app.get("/api/telegram/dialogs")
+async def get_telegram_dialogs(user: Optional[dict] = Depends(get_current_user_optional)):
+    """Fetches user's actual joined Telegram channels and groups so they can select them from UI."""
+    user_id = user["id"] if user else "default"
+    current = await get_user_all_settings(user_id)
+    api_id = current.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
+    api_hash = current.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+
     try:
-        await listener_manager.start_client_listener(target_channel=channel)
-        return {"status": "started", "mode": "userbot"}
+        dialogs = await listener_manager.fetch_user_dialogs(
+            api_id=int(api_id) if api_id else None,
+            api_hash=api_hash
+        )
+        return {"status": "success", "dialogs": dialogs}
+    except Exception as e:
+        return {"status": "error", "detail": str(e), "dialogs": []}
+
+class ClientListenerStart(BaseModel):
+    channels: Optional[str] = None
+    channel_ids: Optional[List[str]] = None
+
+@app.post("/api/telegram/start_client")
+async def start_telegram_client_listener(
+    payload: Optional[ClientListenerStart] = None,
+    channel: Optional[str] = Query(None),
+    user: Optional[dict] = Depends(get_current_user_optional)
+):
+    user_id = user["id"] if user else "default"
+    current = await get_user_all_settings(user_id)
+    api_id = current.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
+    api_hash = current.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+
+    target = None
+    if payload and payload.channel_ids:
+        target = payload.channel_ids
+    elif payload and payload.channels:
+        target = payload.channels
+    elif channel:
+        target = channel
+    else:
+        target = current.get("TELEGRAM_SELECTED_CHANNELS") or current.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
+
+    try:
+        await listener_manager.start_client_listener(
+            target_channel=target,
+            api_id=int(api_id) if api_id else None,
+            api_hash=api_hash
+        )
+        return {"status": "started", "mode": "userbot", "target": target}
     except Exception as e:
         await log_event("ERROR", "TELEGRAM", f"Failed to start Telegram Client listener: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,7 @@
 import asyncio
 import os
 import uuid
-from typing import Optional, Callable
+from typing import Optional, Callable, Any, List
 from pathlib import Path
 from config import settings
 from database import save_message, save_interpretation, log_event
@@ -282,10 +282,41 @@ class TelegramListenerManager:
 
         return payload["data"]
 
-    async def start_client_listener(self, target_channel: Optional[str] = None):
+    async def fetch_user_dialogs(self, api_id: Optional[int] = None, api_hash: Optional[str] = None, session_name: str = "alpha_session"):
+        """Fetches joined Telegram channels and groups so the user can select multiple sources."""
+        from telethon import TelegramClient
+
+        aid = int(api_id or os.getenv("TELEGRAM_API_ID", 21434478) or 21434478)
+        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693"))
+
+        client = TelegramClient(session_name, aid, ahash)
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return []
+
+        dialogs_list = []
+        try:
+            async for dialog in client.iter_dialogs(limit=100):
+                if dialog.is_channel or dialog.is_group:
+                    dialogs_list.append({
+                        "id": str(dialog.id),
+                        "title": dialog.name or "Untitled Chat",
+                        "type": "channel" if dialog.is_channel else "group",
+                        "username": getattr(dialog.entity, "username", None) or "",
+                        "unread_count": getattr(dialog, "unread_count", 0)
+                    })
+        finally:
+            if not self.is_running or self.client != client:
+                await client.disconnect()
+
+        return dialogs_list
+
+    async def start_client_listener(self, target_channel: Optional[Any] = None, api_id: Optional[int] = None, api_hash: Optional[str] = None):
         """
         Starts listening to Telegram channel live using the authenticated Telethon session.
-        Can target a test channel name, ID, or ALPHA PREMIUM.
+        Can target multiple channels, a single channel name/ID, or ALPHA PREMIUM.
         """
         if self.is_running:
             await self.stop_listener()
@@ -293,39 +324,46 @@ class TelegramListenerManager:
         from telethon import TelegramClient, events
         from telethon.tl.types import MessageMediaPhoto
 
-        api_id = int(os.getenv("TELEGRAM_API_ID", 21434478))
-        api_hash = os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693")
+        aid = int(api_id or os.getenv("TELEGRAM_API_ID", 21434478) or 21434478)
+        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693"))
         session_file = "alpha_session"
 
-        client = TelegramClient(session_file, api_id, api_hash)
+        client = TelegramClient(session_file, aid, ahash)
         await client.connect()
 
         if not await client.is_user_authorized():
             await client.disconnect()
             raise RuntimeError("Telegram account not authorized. Please authenticate first.")
 
-        # Find target channel entity
-        target_entity = None
-        search_term = (target_channel or settings.TELEGRAM_CHANNEL_ID or "").strip().lower()
+        # Match multiple channel entities
+        matched_entities = []
+        matched_titles = []
+        
+        target_set = set()
+        if target_channel:
+            if isinstance(target_channel, str):
+                target_set = {s.strip().lower() for s in target_channel.split(",") if s.strip()}
+            elif isinstance(target_channel, list):
+                target_set = {str(s).strip().lower() for s in target_channel if str(s).strip()}
 
         async for dialog in client.iter_dialogs():
             dname = (dialog.name or "").lower()
-            did = str(dialog.id)
+            did = str(dialog.id).lower()
+            duser = (getattr(dialog.entity, "username", "") or "").lower()
 
-            if search_term:
-                if search_term == did or search_term in dname:
-                    target_entity = dialog.entity
-                    target_title = dialog.name
-                    break
+            if target_set:
+                if did in target_set or dname in target_set or (duser and duser in target_set):
+                    matched_entities.append(dialog.entity)
+                    matched_titles.append(dialog.name)
             else:
                 # Default search: look for test channel or alpha premium
                 if "test" in dname or ("alpha" in dname and "premium" in dname):
-                    target_entity = dialog.entity
-                    target_title = dialog.name
+                    matched_entities.append(dialog.entity)
+                    matched_titles.append(dialog.name)
                     break
 
-        chat_filter = target_entity if target_entity else None
-        target_title = getattr(target_entity, "title", target_channel or "All Joined Chats")
+        chat_filter = matched_entities if matched_entities else None
+        active_title = ", ".join(matched_titles) if matched_titles else (target_channel or "All Joined Chats")
 
         @client.on(events.NewMessage(chats=chat_filter))
         async def on_new_msg(event):
@@ -361,7 +399,7 @@ class TelegramListenerManager:
         self.active_mode = "userbot"
         settings.LISTENER_RUNNING = True
         settings.LISTENER_TYPE = "userbot"
-        await log_event("INFO", "TELEGRAM", f"Telethon Live Listener started for channel: '{target_title}'.")
+        await log_event("INFO", "TELEGRAM", f"Telethon Live Listener started for: '{active_title}'.")
 
     async def start_bot_listener(self, token: str, channel_id: Optional[str] = None):
         """Starts telegram bot polling in the background."""

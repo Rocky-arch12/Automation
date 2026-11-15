@@ -41,10 +41,11 @@ window.fetch = function (url, options) {
       return Promise.reject(new Error("Cloudflare Tunnel URL not configured yet. Open Settings to paste your backend URL."));
     }
 
-    // Attach JWT Authorization Header for Multi-Tenant Isolation
-    const token = getAuthToken();
+    // Attach JWT Authorization Header and HttpOnly cookie support
     options = options || {};
+    options.credentials = "include";
     options.headers = options.headers || {};
+    const token = getAuthToken();
     if (token) {
       if (options.headers instanceof Headers) {
         if (!options.headers.has("Authorization")) {
@@ -57,7 +58,21 @@ window.fetch = function (url, options) {
       }
     }
 
-    return _origFetch(getApiUrl(url), options);
+    return _origFetch(getApiUrl(url), options).then(res => {
+      if (res.status === 401 && !url.includes("/api/auth/login") && !url.includes("/api/auth/register")) {
+        const wasUser = getAuthUser();
+        if (wasUser) {
+          localStorage.removeItem("AUTH_USER");
+          localStorage.removeItem("AUTH_TOKEN");
+          updateUserUI(null);
+          if (window.location.hash.includes("dashboard")) {
+            navigateTo("login");
+            showToast("Session expired. Please sign in again.", "info");
+          }
+        }
+      }
+      return res;
+    });
   }
   return _origFetch(url, options);
 };
@@ -70,23 +85,41 @@ let messagesCache = [];
 let ws = null;
 
 // Initialize when DOM is ready
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   initIcons();
   initParticles();
   initSpotlight();
   setupDragAndDrop();
-  initAuthUI();
-  connectWebSocket();
-  loadSystemStatus();
-  renderFeedSkeleton();
-  renderTradesSkeleton();
-  loadStats();
-  loadMessages();
-  loadTrades();
-  loadLogs();
 
-  // Refresh stats periodically
-  setInterval(loadStats, 10000);
+  // Check persisted session via HttpOnly cookie & token
+  const user = await checkAuthSession();
+
+  // Determine initial view based on hash and auth state
+  const hash = (window.location.hash || "").replace("#", "").toLowerCase().trim();
+  if (hash === "dashboard" || hash === "home") {
+    if (user) {
+      navigateTo("dashboard");
+    } else {
+      navigateTo("login");
+    }
+  } else if (hash === "login") {
+    navigateTo("login");
+  } else if (hash === "register") {
+    navigateTo("register");
+  } else if (["features", "architecture", "security"].includes(hash)) {
+    navigateTo("landing", hash);
+  } else {
+    // Default view: Landing page accessible to all users
+    navigateTo("landing");
+  }
+
+  // Refresh stats periodically when dashboard is active
+  setInterval(() => {
+    const dash = document.getElementById("view-dashboard");
+    if (dash && dash.style.display !== "none") {
+      loadStats();
+    }
+  }, 10000);
 });
 
 // [ReactBits: Particles / Sparkles Canvas Background]
@@ -1017,153 +1050,406 @@ function appendLog(level, category, message) {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
-// Settings Modal
-async function openSettingsModal() {
-  // 1. ALWAYS display the modal immediately so the user can see Section 4 and paste their tunnel URL!
-  const modal = document.getElementById("settings-modal");
-  if (modal) modal.style.display = "flex";
+// ============================================================
+// SPA Router & Navigation System
+// ============================================================
 
-  const apiUrlEl = document.getElementById("setting-api-url");
-  if (apiUrlEl) {
-    apiUrlEl.value = getApiBase();
+function navigateTo(viewName, targetAnchor) {
+  const landingView = document.getElementById("view-landing");
+  const loginView = document.getElementById("view-login");
+  const dashboardView = document.getElementById("view-dashboard");
+
+  if (!landingView || !loginView || !dashboardView) return;
+
+  // Handle register alias
+  if (viewName === "register") {
+    switchAuthTab("register");
+    viewName = "login";
+  } else if (viewName === "login") {
+    switchAuthTab("login");
   }
 
-  // 2. Safely attempt to fetch server settings from backend
+  // Protected Route Guard for Dashboard
+  if (viewName === "dashboard") {
+    const user = getAuthUser();
+    if (!user) {
+      showToast("Access Restricted: Please sign in or use 1-Click Demo to launch your dashboard.", "info");
+      navigateTo("login");
+      return;
+    }
+  }
+
+  // Toggle SPA Views
+  landingView.style.display = (viewName === "landing") ? "block" : "none";
+  loginView.style.display = (viewName === "login") ? "block" : "none";
+  dashboardView.style.display = (viewName === "dashboard") ? "block" : "none";
+
+  // Update URL Hash without triggering hard reload
+  if (viewName === "landing" && targetAnchor) {
+    history.pushState(null, "", `#${targetAnchor}`);
+    const anchorEl = document.getElementById(targetAnchor);
+    if (anchorEl) {
+      anchorEl.scrollIntoView({ behavior: "smooth" });
+    }
+  } else {
+    history.pushState(null, "", `#${viewName}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // If entering dashboard, initialize & refresh data streams
+  if (viewName === "dashboard") {
+    loadSystemStatus();
+    loadStats();
+    loadMessages();
+    loadTrades();
+    loadLogs();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      connectWebSocket();
+    }
+  }
+
+  // Refresh Lucide icon renderings
+  initIcons();
+}
+
+function handleDashboardAccess() {
+  const user = getAuthUser();
+  if (user) {
+    navigateTo("dashboard");
+  } else {
+    navigateTo("login");
+  }
+}
+
+function handleHashRouting() {
+  const hash = (window.location.hash || "").replace("#", "").toLowerCase().trim();
+  if (hash === "dashboard" || hash === "home") {
+    handleDashboardAccess();
+  } else if (hash === "login") {
+    navigateTo("login");
+  } else if (hash === "register") {
+    navigateTo("register");
+  } else if (["features", "architecture", "security"].includes(hash)) {
+    navigateTo("landing", hash);
+  } else {
+    // Default route: Landing page
+    navigateTo("landing");
+  }
+}
+
+window.addEventListener("hashchange", handleHashRouting);
+
+// ============================================================
+// Multi-Tenant Authentication & Session Recovery
+// ============================================================
+
+let currentAuthTab = "login";
+
+async function checkAuthSession() {
   try {
-    const res = await fetch("/api/settings");
-    if (!res.ok) return;
-    const cfg = await res.json();
-    if (!cfg || typeof cfg !== "object") return;
-
-    document.getElementById("setting-provider").value = cfg.AI_PROVIDER || "groq";
-    toggleProviderFields();
-
-    document.getElementById("setting-groq-model").value = cfg.GROQ_TEXT_MODEL || "llama-3.3-70b-versatile";
-    document.getElementById("setting-groq-vision-model").value = cfg.GROQ_VISION_MODEL || "llama-3.2-11b-vision-preview";
-    if (cfg.HAS_GROQ_KEY) {
-      document.getElementById("setting-groq-key").placeholder = `Stored (${cfg.GROQ_API_KEY_MASKED})`;
+    const res = await fetch("/api/auth/me", {
+      method: "GET",
+      credentials: "include"
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.user) {
+        localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+        if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
+        updateUserUI(data.user);
+        return data.user;
+      }
+    } else if (res.status === 401) {
+      localStorage.removeItem("AUTH_USER");
+      localStorage.removeItem("AUTH_TOKEN");
+      updateUserUI(null);
+      return null;
     }
-
-    document.getElementById("setting-gemini-model").value = cfg.GEMINI_MODEL || "gemini-1.5-flash";
-    if (cfg.HAS_GEMINI_KEY) {
-      document.getElementById("setting-gemini-key").placeholder = `Stored (${cfg.GEMINI_API_KEY_MASKED})`;
-    }
-
-    if (cfg.HAS_BOT_TOKEN) {
-      document.getElementById("setting-bot-token").placeholder = `Stored (${cfg.TELEGRAM_BOT_TOKEN_MASKED})`;
-    }
-    document.getElementById("setting-channel-id").value = cfg.TELEGRAM_CHANNEL_ID || "";
-
-    // XM MT5 settings
-    document.getElementById("setting-xm-login").value = cfg.XM_MT5_LOGIN || "";
-    document.getElementById("setting-xm-server").value = cfg.XM_MT5_SERVER || "XMGlobal-MT5-Demo";
-    document.getElementById("setting-xm-auto").checked = (cfg.XM_AUTO_EXECUTION !== "false");
   } catch (e) {
-    console.warn("Could not load remote settings (normal if backend tunnel is not linked yet):", e.message);
+    console.warn("Session check offline or tunnel not connected yet:", e.message);
+  }
+  const localUser = getAuthUser();
+  updateUserUI(localUser);
+  return localUser;
+}
+
+function updateUserUI(user) {
+  const userBadge = document.getElementById("user-profile-badge");
+  const nameEl = document.getElementById("user-display-name");
+  if (user) {
+    if (userBadge) userBadge.style.display = "flex";
+    if (nameEl) nameEl.innerText = user.name || user.email.split("@")[0];
+  } else {
+    if (userBadge) userBadge.style.display = "none";
   }
 }
 
-function closeSettingsModal() {
-  document.getElementById("settings-modal").style.display = "none";
+function initAuthUI() {
+  const user = getAuthUser();
+  updateUserUI(user);
 }
 
-function toggleProviderFields() {
-  const prov = document.getElementById("setting-provider").value;
-  document.getElementById("groq-fields").style.display = prov === "groq" ? "block" : "none";
-  document.getElementById("gemini-fields").style.display = prov === "gemini" ? "block" : "none";
-}
+function switchAuthTab(tab) {
+  currentAuthTab = tab;
+  const tabLogin = document.getElementById("auth-tab-login");
+  const tabRegister = document.getElementById("auth-tab-register");
+  const nameGroup = document.getElementById("auth-name-group");
+  const submitBtn = document.getElementById("auth-submit-btn");
+  const viewTitle = document.getElementById("auth-view-title");
+  const viewSubtitle = document.getElementById("auth-view-subtitle");
 
-async function saveSettings() {
-  const apiUrlEl = document.getElementById("setting-api-url");
-  let newApiUrl = "";
-  if (apiUrlEl) {
-    newApiUrl = apiUrlEl.value.trim().replace(/\/$/, "");
-    if (newApiUrl) {
-      localStorage.setItem("API_BACKEND_URL", newApiUrl);
-    } else {
-      localStorage.removeItem("API_BACKEND_URL");
+  if (tab === "register") {
+    if (tabLogin) {
+      tabLogin.style.background = "transparent";
+      tabLogin.style.color = "var(--text-dim)";
+      tabLogin.style.borderColor = "transparent";
     }
+    if (tabRegister) {
+      tabRegister.style.background = "rgba(56, 189, 248, 0.15)";
+      tabRegister.style.color = "#38bdf8";
+      tabRegister.style.borderColor = "rgba(56, 189, 248, 0.3)";
+    }
+    if (nameGroup) nameGroup.style.display = "block";
+    if (submitBtn) submitBtn.innerText = "Create Isolated Account";
+    if (viewTitle) viewTitle.innerText = "Create Your Trader Account";
+    if (viewSubtitle) viewSubtitle.innerText = "Get a dedicated, isolated execution sandbox with AES-256 encryption";
+  } else {
+    if (tabRegister) {
+      tabRegister.style.background = "transparent";
+      tabRegister.style.color = "var(--text-dim)";
+      tabRegister.style.borderColor = "transparent";
+    }
+    if (tabLogin) {
+      tabLogin.style.background = "rgba(56, 189, 248, 0.15)";
+      tabLogin.style.color = "#38bdf8";
+      tabLogin.style.borderColor = "rgba(56, 189, 248, 0.3)";
+    }
+    if (nameGroup) nameGroup.style.display = "none";
+    if (submitBtn) submitBtn.innerText = "Sign In";
+    if (viewTitle) viewTitle.innerText = "Sign In to AlphaSignal";
+    if (viewSubtitle) viewSubtitle.innerText = "Access your isolated trading dashboard & execution vault";
+  }
+}
+
+async function submitAuthForm() {
+  const email = (document.getElementById("auth-email").value || "").trim();
+  const password = (document.getElementById("auth-password").value || "").trim();
+  const name = (document.getElementById("auth-name") ? document.getElementById("auth-name").value : "").trim();
+
+  if (!email || !email.includes("@")) {
+    showToast("Please enter a valid email address.", "error");
+    return;
+  }
+  if (!password || password.length < 6) {
+    showToast("Password must be at least 6 characters.", "error");
+    return;
   }
 
-  const payload = {
-    AI_PROVIDER: document.getElementById("setting-provider").value,
-    GROQ_TEXT_MODEL: document.getElementById("setting-groq-model").value,
-    GROQ_VISION_MODEL: document.getElementById("setting-groq-vision-model").value,
-    GEMINI_MODEL: document.getElementById("setting-gemini-model").value,
-    TELEGRAM_CHANNEL_ID: document.getElementById("setting-channel-id").value.trim()
-  };
-
-  const groqKey = document.getElementById("setting-groq-key").value.trim();
-  if (groqKey) payload.GROQ_API_KEY = groqKey;
-
-  const geminiKey = document.getElementById("setting-gemini-key").value.trim();
-  if (geminiKey) payload.GEMINI_API_KEY = geminiKey;
-
-  const botToken = document.getElementById("setting-bot-token").value.trim();
-  if (botToken) payload.TELEGRAM_BOT_TOKEN = botToken;
-
-  // XM MT5 fields
-  const xmAuto = document.getElementById("setting-xm-auto").checked;
-  const xmLogin = document.getElementById("setting-xm-login").value.trim();
-  const xmServer = document.getElementById("setting-xm-server").value.trim();
-  const xmPass = document.getElementById("setting-xm-password").value.trim();
-
-  payload.XM_AUTO_EXECUTION = xmAuto ? "true" : "false";
-  if (xmLogin) payload.XM_MT5_LOGIN = xmLogin;
-  if (xmServer) payload.XM_MT5_SERVER = xmServer;
-  if (xmPass) payload.XM_MT5_PASSWORD = xmPass;
+  const endpoint = currentAuthTab === "register" ? "/api/auth/register" : "/api/auth/login";
+  const payload = { email, password };
+  if (currentAuthTab === "register") payload.name = name;
 
   try {
-    const res = await fetch("/api/settings", {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    if (res.ok) {
-      showToast("Settings and XM MT5 configuration saved successfully!", "success");
-      closeSettingsModal();
-      loadSystemStatus();
-      if (ws) ws.close();
-      connectWebSocket();
-      loadStats();
-      loadMessages();
-      loadTrades();
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.detail || "Authentication failed.", "error");
+      return;
+    }
+
+    if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
+    if (data.user) localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+
+    updateUserUI(data.user);
+    showToast(`Welcome back, ${data.user.name || data.user.email}! Profile isolated & encrypted.`, "success");
+    navigateTo("dashboard");
+  } catch (e) {
+    showToast("Authentication error: " + e.message, "error");
+  }
+}
+
+async function handleGoogleSignIn() {
+  try {
+    const fakeGoogleEmail = `trader_${Math.floor(1000 + Math.random() * 9000)}@gmail.com`;
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: fakeGoogleEmail,
+        name: "Google Trader",
+        auth_provider: "google"
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.user) {
+      if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
+      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+      updateUserUI(data.user);
+      showToast("Signed in with Google OAuth successfully!", "success");
+      navigateTo("dashboard");
     } else {
-      showToast("Backend Tunnel URL saved! Reconnecting...", "success");
-      closeSettingsModal();
-      setTimeout(() => location.reload(), 800);
+      showToast(data.detail || "Google OAuth failed.", "error");
     }
   } catch (e) {
-    if (newApiUrl) {
-      showToast("Backend Tunnel URL saved! Reconnecting to engine...", "success");
-      closeSettingsModal();
-      setTimeout(() => location.reload(), 800);
+    showToast("Google OAuth error: " + e.message, "error");
+  }
+}
+
+async function continueAsDemo() {
+  try {
+    const res = await fetch("/api/auth/demo", { method: "POST" });
+    const data = await res.json();
+    if (res.ok && data.user) {
+      if (data.token) localStorage.setItem("AUTH_TOKEN", data.token);
+      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
+      updateUserUI(data.user);
+      showToast("1-Click Instant Demo Profile activated!", "success");
+      navigateTo("dashboard");
+    }
+  } catch (e) {
+    showToast("Demo sign-in error: " + e.message, "error");
+  }
+}
+
+async function logoutUser() {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch (e) {
+    console.warn("Logout request failed:", e);
+  }
+  localStorage.removeItem("AUTH_TOKEN");
+  localStorage.removeItem("AUTH_USER");
+  updateUserUI(null);
+  showToast("Signed out safely. Your credentials remain isolated & encrypted.", "info");
+  navigateTo("landing");
+}
+
+// ============================================================
+// Multi-Channel Telegram Dialogs Harvester
+// ============================================================
+
+let currentDialogsList = [];
+
+async function fetchTelegramDialogs() {
+  const btn = document.getElementById("btn-fetch-dialogs");
+  const container = document.getElementById("tg-dialogs-container");
+  const empty = document.getElementById("tg-dialogs-empty");
+
+  const originalBtnHtml = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 12px; height: 12px;"></i> Loading Dialogs...`;
+    btn.disabled = true;
+    initIcons();
+  }
+
+  try {
+    const res = await fetch("/api/telegram/dialogs");
+    const data = await res.json();
+
+    if (data.status === "success" && Array.isArray(data.dialogs) && data.dialogs.length > 0) {
+      currentDialogsList = data.dialogs;
+
+      // Read saved channel IDs from setting or global
+      let savedIds = [];
+      const savedStr = window._savedSelectedChannels || "";
+      if (savedStr) {
+        savedIds = savedStr.split(",").map(s => s.trim());
+      }
+
+      container.innerHTML = data.dialogs.map(d => {
+        const isChecked = savedIds.includes(String(d.id)) || (d.username && savedIds.includes(String(d.username))) ? "checked" : "";
+        const badgeColor = d.type === "channel" ? "#38bdf8" : (d.type === "supergroup" ? "#a855f7" : "#10b981");
+        return `
+          <label class="dialog-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.65rem; background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; margin-bottom: 5px; cursor: pointer; transition: all 0.2s;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" class="dialog-checkbox" value="${escapeHtml(String(d.id))}" data-title="${escapeHtml(d.title)}" ${isChecked} style="accent-color: #38bdf8; width: 16px; height: 16px; cursor: pointer;">
+              <div>
+                <div style="font-size: 0.8rem; font-weight: 600; color: #f1f5f9;">${escapeHtml(d.title)}</div>
+                <div style="font-size: 0.68rem; color: var(--text-dim);">${d.username ? `@${escapeHtml(d.username)}` : `ID: ${d.id}`}</div>
+              </div>
+            </div>
+            <span style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); color: ${badgeColor}; border: 1px solid ${badgeColor}40;">
+              ${escapeHtml(d.type)}
+            </span>
+          </label>
+        `;
+      }).join("");
+
+      if (empty) empty.style.display = "none";
+      if (container) container.style.display = "block";
+      showToast(`Fetched ${data.dialogs.length} joined channels & groups! Check the ones you want to monitor.`, "success");
     } else {
-      showToast("Failed to save settings: " + e.message, "error");
+      if (empty) {
+        empty.innerHTML = `⚠️ ${escapeHtml(data.detail || "No channels found. Please make sure your Telegram API ID & Hash are saved in settings and authorized.")}`;
+        empty.style.display = "block";
+      }
+      if (container) container.style.display = "none";
+      showToast(data.detail || "No channels found. Verify Telegram API ID/Hash.", "error");
+    }
+  } catch (e) {
+    if (empty) {
+      empty.innerHTML = `⚠️ Error fetching dialogs: ${escapeHtml(e.message)}`;
+      empty.style.display = "block";
+    }
+    showToast("Failed to fetch dialogs: " + e.message, "error");
+  } finally {
+    if (btn) {
+      btn.innerHTML = originalBtnHtml || `<i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> Fetch My Groups & Channels`;
+      btn.disabled = false;
+      initIcons();
     }
   }
 }
 
-async function startClientListener() {
+async function startMultiClientListener() {
+  const checkboxes = document.querySelectorAll(".dialog-checkbox:checked");
+  const selectedIds = Array.from(checkboxes).map(cb => cb.value);
+
+  if (selectedIds.length === 0) {
+    showToast("Please check at least one Telegram channel or group to monitor.", "error");
+    return;
+  }
+
+  const btn = document.getElementById("btn-start-multi");
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 14px; height: 14px;"></i> Starting Multi-Channel Listener...`;
+    initIcons();
+  }
+
   try {
-    const chanInput = document.getElementById("setting-userbot-channel");
-    const chanVal = chanInput ? chanInput.value.trim() : "";
-    let url = "/api/telegram/start_client";
-    if (chanVal) {
-      url += `?channel=${encodeURIComponent(chanVal)}`;
-    }
-    const res = await fetch(url, { method: "POST" });
+    // 1. Save selected channels to user profile first
+    window._savedSelectedChannels = selectedIds.join(",");
+    await saveSettings(true); // silent save
+
+    // 2. Start Telethon client listener for all selected channels concurrently
+    const res = await fetch("/api/telegram/start_client", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel_ids: selectedIds })
+    });
     const data = await res.json();
+
     if (res.ok) {
-      showToast(`Live listener started for '${chanVal || "ALPHA PREMIUM"}'!`, "success");
+      showToast(`Multi-channel listener active! Monitoring ${selectedIds.length} channel(s) concurrently.`, "success");
       closeSettingsModal();
       loadSystemStatus();
     } else {
-      showToast(`Error starting listener: ${data.detail || 'Failed to start.'}`, "error");
+      showToast(`Failed to start listener: ${data.detail || "Check Telegram credentials"}`, "error");
     }
   } catch (e) {
-    showToast("Failed to start listener: " + e.message, "error");
+    showToast("Listener error: " + e.message, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="radio" style="width: 14px; height: 14px;"></i> Start Multi-Channel Listener`;
+      initIcons();
+    }
   }
 }
 
@@ -1189,6 +1475,214 @@ async function stopTelegramBot() {
     loadSystemStatus();
   } catch (e) {
     showToast("Failed to stop listener: " + e.message, "error");
+  }
+}
+
+// ============================================================
+// Settings Modal & AES-256 Vault Management
+// ============================================================
+
+async function openSettingsModal() {
+  const modal = document.getElementById("settings-modal");
+  if (modal) modal.style.display = "flex";
+
+  const apiUrlEl = document.getElementById("setting-api-url");
+  if (apiUrlEl) {
+    apiUrlEl.value = getApiBase();
+  }
+
+  try {
+    const res = await fetch("/api/settings");
+    if (!res.ok) return;
+    const cfg = await res.json();
+    if (!cfg || typeof cfg !== "object") return;
+
+    // AI Provider
+    const provEl = document.getElementById("setting-provider");
+    if (provEl) provEl.value = cfg.AI_PROVIDER || "groq";
+    toggleProviderFields();
+
+    // Groq fields
+    const groqModelEl = document.getElementById("setting-groq-model");
+    if (groqModelEl) groqModelEl.value = cfg.GROQ_TEXT_MODEL || "llama-3.3-70b-versatile";
+    const groqVisionEl = document.getElementById("setting-groq-vision-model");
+    if (groqVisionEl) groqVisionEl.value = cfg.GROQ_VISION_MODEL || "llama-3.2-11b-vision-preview";
+    const groqKeyEl = document.getElementById("setting-groq-key");
+    if (groqKeyEl) {
+      groqKeyEl.value = "";
+      if (cfg.HAS_GROQ_KEY) {
+        groqKeyEl.placeholder = `Stored (${cfg.GROQ_API_KEY_MASKED})`;
+      } else {
+        groqKeyEl.placeholder = "gsk_...";
+      }
+    }
+
+    // Gemini fields
+    const geminiModelEl = document.getElementById("setting-gemini-model");
+    if (geminiModelEl) geminiModelEl.value = cfg.GEMINI_MODEL || "gemini-1.5-flash";
+    const geminiKeyEl = document.getElementById("setting-gemini-key");
+    if (geminiKeyEl) {
+      geminiKeyEl.value = "";
+      if (cfg.HAS_GEMINI_KEY) {
+        geminiKeyEl.placeholder = `Stored (${cfg.GEMINI_API_KEY_MASKED})`;
+      } else {
+        geminiKeyEl.placeholder = "AIzaSy...";
+      }
+    }
+
+    // Telegram User Client fields
+    const tgIdEl = document.getElementById("setting-tg-api-id");
+    if (tgIdEl) tgIdEl.value = cfg.TELEGRAM_API_ID || "";
+    const tgPhoneEl = document.getElementById("setting-tg-phone");
+    if (tgPhoneEl) tgPhoneEl.value = cfg.TELEGRAM_PHONE || "";
+    const tgHashEl = document.getElementById("setting-tg-api-hash");
+    if (tgHashEl) {
+      tgHashEl.value = "";
+      if (cfg.HAS_TELEGRAM_HASH) {
+        tgHashEl.placeholder = `Stored (${cfg.TELEGRAM_API_HASH_MASKED})`;
+      } else {
+        tgHashEl.placeholder = "••••••••••••••••••••••••••••••••";
+      }
+    }
+
+    // Telegram Bot Token fallback
+    const botTokenEl = document.getElementById("setting-bot-token");
+    if (botTokenEl) {
+      botTokenEl.value = "";
+      if (cfg.HAS_BOT_TOKEN) {
+        botTokenEl.placeholder = `Stored (${cfg.TELEGRAM_BOT_TOKEN_MASKED})`;
+      } else {
+        botTokenEl.placeholder = "123456:ABC-DEF...";
+      }
+    }
+
+    // Selected Channels
+    window._savedSelectedChannels = cfg.TELEGRAM_SELECTED_CHANNELS || "";
+    if (cfg.TELEGRAM_SELECTED_CHANNELS) {
+      const emptyEl = document.getElementById("tg-dialogs-empty");
+      if (emptyEl) {
+        emptyEl.innerHTML = `Saved monitored channels: <b>${escapeHtml(cfg.TELEGRAM_SELECTED_CHANNELS)}</b><br><span style="font-size: 0.68rem; color: #38bdf8;">Click 'Fetch My Groups & Channels' to view and re-select from list.</span>`;
+      }
+    }
+
+    // XM MT5 settings
+    const xmLoginEl = document.getElementById("setting-xm-login");
+    if (xmLoginEl) xmLoginEl.value = cfg.XM_MT5_LOGIN || "";
+    const xmServerEl = document.getElementById("setting-xm-server");
+    if (xmServerEl) xmServerEl.value = cfg.XM_MT5_SERVER || "XMGlobal-MT5 10";
+    const xmAutoEl = document.getElementById("setting-xm-auto");
+    if (xmAutoEl) xmAutoEl.checked = (cfg.XM_AUTO_EXECUTION !== "false");
+    const xmPassEl = document.getElementById("setting-xm-password");
+    if (xmPassEl) xmPassEl.value = "";
+
+  } catch (e) {
+    console.warn("Could not load remote settings (normal if backend tunnel is not linked yet):", e.message);
+  }
+}
+
+function closeSettingsModal() {
+  document.getElementById("settings-modal").style.display = "none";
+}
+
+function toggleProviderFields() {
+  const prov = document.getElementById("setting-provider").value;
+  document.getElementById("groq-fields").style.display = prov === "groq" ? "block" : "none";
+  document.getElementById("gemini-fields").style.display = prov === "gemini" ? "block" : "none";
+}
+
+async function saveSettings(silent = false) {
+  const apiUrlEl = document.getElementById("setting-api-url");
+  let newApiUrl = "";
+  if (apiUrlEl) {
+    newApiUrl = apiUrlEl.value.trim().replace(/\/$/, "");
+    if (newApiUrl) {
+      localStorage.setItem("API_BACKEND_URL", newApiUrl);
+    } else {
+      localStorage.removeItem("API_BACKEND_URL");
+    }
+  }
+
+  const payload = {
+    AI_PROVIDER: document.getElementById("setting-provider") ? document.getElementById("setting-provider").value : "groq",
+    GROQ_TEXT_MODEL: document.getElementById("setting-groq-model") ? document.getElementById("setting-groq-model").value : "llama-3.3-70b-versatile",
+    GROQ_VISION_MODEL: document.getElementById("setting-groq-vision-model") ? document.getElementById("setting-groq-vision-model").value : "llama-3.2-11b-vision-preview",
+    GEMINI_MODEL: document.getElementById("setting-gemini-model") ? document.getElementById("setting-gemini-model").value : "gemini-1.5-flash"
+  };
+
+  // Optional AI keys if user typed new one
+  const groqKey = document.getElementById("setting-groq-key") ? document.getElementById("setting-groq-key").value.trim() : "";
+  if (groqKey) payload.GROQ_API_KEY = groqKey;
+
+  const geminiKey = document.getElementById("setting-gemini-key") ? document.getElementById("setting-gemini-key").value.trim() : "";
+  if (geminiKey) payload.GEMINI_API_KEY = geminiKey;
+
+  // Telegram fields
+  const tgApiId = document.getElementById("setting-tg-api-id") ? document.getElementById("setting-tg-api-id").value.trim() : "";
+  if (tgApiId) payload.TELEGRAM_API_ID = tgApiId;
+
+  const tgPhone = document.getElementById("setting-tg-phone") ? document.getElementById("setting-tg-phone").value.trim() : "";
+  if (tgPhone) payload.TELEGRAM_PHONE = tgPhone;
+
+  const tgHash = document.getElementById("setting-tg-api-hash") ? document.getElementById("setting-tg-api-hash").value.trim() : "";
+  if (tgHash) payload.TELEGRAM_API_HASH = tgHash;
+
+  const botToken = document.getElementById("setting-bot-token") ? document.getElementById("setting-bot-token").value.trim() : "";
+  if (botToken) payload.TELEGRAM_BOT_TOKEN = botToken;
+
+  // Selected Channels
+  const checkboxes = document.querySelectorAll(".dialog-checkbox:checked");
+  if (checkboxes.length > 0) {
+    const selectedIds = Array.from(checkboxes).map(cb => cb.value);
+    payload.TELEGRAM_SELECTED_CHANNELS = selectedIds.join(",");
+    window._savedSelectedChannels = payload.TELEGRAM_SELECTED_CHANNELS;
+  } else if (window._savedSelectedChannels) {
+    payload.TELEGRAM_SELECTED_CHANNELS = window._savedSelectedChannels;
+  }
+
+  // XM MT5 fields
+  const xmAuto = document.getElementById("setting-xm-auto") ? document.getElementById("setting-xm-auto").checked : true;
+  const xmLogin = document.getElementById("setting-xm-login") ? document.getElementById("setting-xm-login").value.trim() : "";
+  const xmServer = document.getElementById("setting-xm-server") ? document.getElementById("setting-xm-server").value.trim() : "";
+  const xmPass = document.getElementById("setting-xm-password") ? document.getElementById("setting-xm-password").value.trim() : "";
+
+  payload.XM_AUTO_EXECUTION = xmAuto ? "true" : "false";
+  if (xmLogin) payload.XM_MT5_LOGIN = xmLogin;
+  if (xmServer) payload.XM_MT5_SERVER = xmServer;
+  if (xmPass) payload.XM_MT5_PASSWORD = xmPass;
+
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      if (!silent) {
+        showToast("Settings securely saved & encrypted (AES-256)!", "success");
+        closeSettingsModal();
+        loadSystemStatus();
+        if (ws) ws.close();
+        connectWebSocket();
+        loadStats();
+        loadMessages();
+        loadTrades();
+      }
+    } else {
+      if (!silent) {
+        showToast("Backend Tunnel URL saved! Reconnecting...", "success");
+        closeSettingsModal();
+        setTimeout(() => location.reload(), 800);
+      }
+    }
+  } catch (e) {
+    if (newApiUrl && !silent) {
+      showToast("Backend Tunnel URL saved! Reconnecting to engine...", "success");
+      closeSettingsModal();
+      setTimeout(() => location.reload(), 800);
+    } else if (!silent) {
+      showToast("Failed to save settings: " + e.message, "error");
+    }
   }
 }
 
@@ -1230,178 +1724,4 @@ function escapeHtml(str) {
       "'": "&#039;"
     }[m];
   });
-}
-
-// ============================================================
-// Multi-Tenant Authentication & OAuth Module
-// ============================================================
-
-let currentAuthTab = "login";
-
-function initAuthUI() {
-  const token = getAuthToken();
-  const user = getAuthUser();
-  const userBadge = document.getElementById("user-profile-badge");
-  const loginBtn = document.getElementById("btn-open-login");
-  const nameEl = document.getElementById("user-display-name");
-
-  if (token && user) {
-    if (userBadge) userBadge.style.display = "flex";
-    if (loginBtn) loginBtn.style.display = "none";
-    if (nameEl) nameEl.innerText = user.name || user.email.split("@")[0];
-  } else {
-    if (userBadge) userBadge.style.display = "none";
-    if (loginBtn) loginBtn.style.display = "flex";
-    if (!sessionStorage.getItem("auth_dismissed")) {
-      setTimeout(openAuthModal, 600);
-    }
-  }
-}
-
-function openAuthModal() {
-  const modal = document.getElementById("auth-modal");
-  if (modal) modal.style.display = "flex";
-}
-
-function closeAuthModal() {
-  const modal = document.getElementById("auth-modal");
-  if (modal) modal.style.display = "none";
-  sessionStorage.setItem("auth_dismissed", "true");
-}
-
-function switchAuthTab(tab) {
-  currentAuthTab = tab;
-  const tabLogin = document.getElementById("auth-tab-login");
-  const tabRegister = document.getElementById("auth-tab-register");
-  const nameGroup = document.getElementById("auth-name-group");
-  const submitBtn = document.getElementById("auth-submit-btn");
-
-  if (tab === "register") {
-    tabLogin.style.background = "transparent";
-    tabLogin.style.color = "var(--text-dim)";
-    tabLogin.style.borderColor = "transparent";
-
-    tabRegister.style.background = "rgba(56, 189, 248, 0.15)";
-    tabRegister.style.color = "#38bdf8";
-    tabRegister.style.borderColor = "rgba(56, 189, 248, 0.3)";
-
-    if (nameGroup) nameGroup.style.display = "block";
-    if (submitBtn) submitBtn.innerText = "Create Isolated Account";
-  } else {
-    tabRegister.style.background = "transparent";
-    tabRegister.style.color = "var(--text-dim)";
-    tabRegister.style.borderColor = "transparent";
-
-    tabLogin.style.background = "rgba(56, 189, 248, 0.15)";
-    tabLogin.style.color = "#38bdf8";
-    tabLogin.style.borderColor = "rgba(56, 189, 248, 0.3)";
-
-    if (nameGroup) nameGroup.style.display = "none";
-    if (submitBtn) submitBtn.innerText = "Sign In";
-  }
-}
-
-async function submitAuthForm() {
-  const email = (document.getElementById("auth-email").value || "").trim();
-  const password = (document.getElementById("auth-password").value || "").trim();
-  const name = (document.getElementById("auth-name") ? document.getElementById("auth-name").value : "").trim();
-
-  if (!email || !email.includes("@")) {
-    showToast("Please enter a valid email address.", "error");
-    return;
-  }
-  if (!password || password.length < 6) {
-    showToast("Password must be at least 6 characters.", "error");
-    return;
-  }
-
-  const endpoint = currentAuthTab === "register" ? "/api/auth/register" : "/api/auth/login";
-  const payload = { email, password };
-  if (currentAuthTab === "register") payload.name = name;
-
-  try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      showToast(data.detail || "Authentication failed.", "error");
-      return;
-    }
-
-    localStorage.setItem("AUTH_TOKEN", data.token);
-    localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-
-    showToast(`Welcome ${data.user.name || data.user.email}! Profile isolated & encrypted.`, "success");
-    closeAuthModal();
-    initAuthUI();
-    loadSystemStatus();
-    loadStats();
-    loadMessages();
-    loadTrades();
-  } catch (e) {
-    showToast("Authentication error: " + e.message, "error");
-  }
-}
-
-async function handleGoogleSignIn() {
-  try {
-    const fakeGoogleEmail = `trader_${Math.floor(1000 + Math.random() * 9000)}@gmail.com`;
-    const res = await fetch("/api/auth/google", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: fakeGoogleEmail,
-        name: "Google Trader",
-        auth_provider: "google"
-      })
-    });
-    const data = await res.json();
-    if (res.ok && data.token) {
-      localStorage.setItem("AUTH_TOKEN", data.token);
-      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-      showToast("Signed in with Google OAuth successfully!", "success");
-      closeAuthModal();
-      initAuthUI();
-      loadSystemStatus();
-      loadStats();
-      loadMessages();
-      loadTrades();
-    } else {
-      showToast(data.detail || "Google OAuth failed.", "error");
-    }
-  } catch (e) {
-    showToast("Google OAuth error: " + e.message, "error");
-  }
-}
-
-async function continueAsDemo() {
-  try {
-    const res = await fetch("/api/auth/demo", { method: "POST" });
-    const data = await res.json();
-    if (res.ok && data.token) {
-      localStorage.setItem("AUTH_TOKEN", data.token);
-      localStorage.setItem("AUTH_USER", JSON.stringify(data.user));
-      showToast("1-Click Instant Demo Profile activated!", "success");
-      closeAuthModal();
-      initAuthUI();
-      loadSystemStatus();
-      loadStats();
-      loadMessages();
-      loadTrades();
-    }
-  } catch (e) {
-    showToast("Demo sign-in error: " + e.message, "error");
-  }
-}
-
-function logoutUser() {
-  localStorage.removeItem("AUTH_TOKEN");
-  localStorage.removeItem("AUTH_USER");
-  showToast("Signed out. Your encrypted credentials remain isolated.", "info");
-  initAuthUI();
-  setTimeout(() => location.reload(), 400);
 }

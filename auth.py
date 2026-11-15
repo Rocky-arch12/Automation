@@ -4,7 +4,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request, Response
 import jwt
 from cryptography.fernet import Fernet
 from config import settings
@@ -100,11 +100,42 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-async def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
-    """Dependency: returns the authenticated user if valid token is provided, else None."""
-    if not authorization:
+def set_auth_cookie(response: Response, token: str):
+    """Sets secure HttpOnly session cookie for authentication with cross-origin support."""
+    try:
+        response.set_cookie(
+            key="access_token",
+            value=token,
+            httponly=True,
+            max_age=30 * 24 * 3600,
+            expires=30 * 24 * 3600,
+            samesite="none",
+            secure=True,
+            path="/"
+        )
+    except Exception as e:
+        print(f"[AUTH COOKIE ERROR] {e}")
+
+def clear_auth_cookie(response: Response):
+    """Clears the HttpOnly session cookie on logout."""
+    try:
+        response.delete_cookie(
+            key="access_token",
+            path="/",
+            samesite="none",
+            secure=True
+        )
+    except Exception as e:
+        print(f"[AUTH COOKIE CLEAR ERROR] {e}")
+
+async def get_current_user_optional(request: Request, authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
+    """Dependency: returns the authenticated user from HttpOnly Cookie or Bearer header, else None."""
+    token = request.cookies.get("access_token") if request else None
+    if not token and authorization:
+        token = authorization
+    if not token:
         return None
-    payload = decode_access_token(authorization)
+    payload = decode_access_token(token)
     if not payload or "sub" not in payload:
         return None
     return {
@@ -114,9 +145,9 @@ async def get_current_user_optional(authorization: Optional[str] = Header(None))
         "provider": payload.get("provider", "local")
     }
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_current_user(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """Dependency: enforces authenticated session or raises HTTP 401."""
-    user = await get_current_user_optional(authorization)
+    user = await get_current_user_optional(request, authorization)
     if not user:
         raise HTTPException(
             status_code=401,
