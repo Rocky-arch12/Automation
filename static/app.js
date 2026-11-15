@@ -141,8 +141,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
 
-  // 2. Initialize official Google Identity Services
-  initGoogleIdentityServices();
+  // 2. Fetch server environment auth configuration (.env)
+  await loadAuthConfig();
 
   // Check persisted session via HttpOnly cookie & token
   const user = await checkAuthSession();
@@ -1475,15 +1475,31 @@ async function submitAuthForm() {
 }
 
 // ============================================================
-// Official Google Identity Services & OAuth 2.0 Flow
+// Official Google Identity Services & OAuth 2.0 Flow (.env Driven)
 // ============================================================
-const GOOGLE_CLIENT_ID = "787459168867-aksr8lps7adf9t6c1av95863f8npf7v1.apps.googleusercontent.com";
+let backendGoogleClientId = "";
+
+async function loadAuthConfig() {
+  try {
+    const res = await fetch("/api/auth/config");
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.google_client_id) {
+        backendGoogleClientId = data.google_client_id.trim();
+        initGoogleIdentityServices();
+      }
+    }
+  } catch (e) {
+    console.warn("Auth config fetch warning:", e.message);
+  }
+}
 
 function initGoogleIdentityServices() {
+  if (!backendGoogleClientId) return;
   if (window.google && window.google.accounts && window.google.accounts.id) {
     try {
       google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
+        client_id: backendGoogleClientId,
         callback: handleGoogleCredentialResponse,
         auto_select: false,
         cancel_on_tap_outside: true
@@ -1509,8 +1525,12 @@ function initGoogleIdentityServices() {
   }
 }
 
-// 1. Direct Google OAuth Redirect (Redirects to official accounts.google.com screen)
+// 1. Direct Google OAuth Redirect
 function triggerGoogleOAuthRedirect() {
+  if (!backendGoogleClientId) {
+    showToast("Google Client ID is not set in .env. Click your authorized administrator account below for 1-click access.", "info");
+    return;
+  }
   if (window.google && window.google.accounts && window.google.accounts.id) {
     try {
       google.accounts.id.prompt((notification) => {
@@ -1525,9 +1545,8 @@ function triggerGoogleOAuthRedirect() {
 }
 
 function redirectToGoogleOAuthPage() {
-  const clientId = localStorage.getItem("GOOGLE_CLIENT_ID") || GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    promptGoogleClientIdConfig();
+  if (!backendGoogleClientId) {
+    showToast("Google Client ID is not configured in .env. Please click your authorized administrator account below.", "info");
     return;
   }
 
@@ -1536,7 +1555,7 @@ function redirectToGoogleOAuthPage() {
   const nonce = Math.random().toString(36).substring(7);
 
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
-    client_id: clientId,
+    client_id: backendGoogleClientId,
     redirect_uri: redirectUri,
     response_type: "token id_token",
     scope: "openid email profile",
@@ -1546,19 +1565,6 @@ function redirectToGoogleOAuthPage() {
   }).toString();
 
   window.location.href = authUrl;
-}
-
-function promptGoogleClientIdConfig() {
-  const current = localStorage.getItem("GOOGLE_CLIENT_ID") || "";
-  const val = prompt(
-    "Enter your Google OAuth Client ID (from console.cloud.google.com):\nIt ends with .apps.googleusercontent.com",
-    current
-  );
-  if (val && val.trim()) {
-    localStorage.setItem("GOOGLE_CLIENT_ID", val.trim());
-    showToast("Google OAuth Client ID saved! Now click 'Sign in with Google'.", "success");
-    initGoogleIdentityServices();
-  }
 }
 
 async function loginAuthorizedAdmin(email) {

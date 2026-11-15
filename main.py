@@ -465,6 +465,14 @@ async def logout_user(response: Response):
     clear_auth_cookie(response)
     return {"status": "logged_out"}
 
+@app.get("/api/auth/config")
+async def get_auth_config():
+    """Returns public auth configuration loaded from server environment (.env)."""
+    return {
+        "google_client_id": settings.GOOGLE_CLIENT_ID or "",
+        "allowed_emails": list(ALLOWED_GOOGLE_EMAILS)
+    }
+
 @app.get("/api/auth/me")
 async def get_current_user_profile(user: dict = Depends(get_current_user)):
     return {"status": "authenticated", "user": user}
