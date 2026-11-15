@@ -1,7 +1,7 @@
 // AlphaSignal AI Frontend Application
 
 // Active Cloudflare Tunnel Fallback
-const CURRENT_ACTIVE_TUNNEL = "https://demanding-reports-street-plugins.trycloudflare.com";
+const CURRENT_ACTIVE_TUNNEL = "https://composition-logos-settle-manually.trycloudflare.com";
 
 // Check query param for backend URL convenience: ?backend=https://...
 const urlParams = new URLSearchParams(window.location.search);
@@ -11,7 +11,7 @@ if (urlParams.has("backend")) {
     localStorage.setItem("API_BACKEND_URL", backendParam);
     try {
       window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -22,6 +22,11 @@ function getApiBase() {
     "recorders-retirement-prostores-touch.trycloudflare.com",
     "effectiveness-welfare-multimedia-storage.trycloudflare.com",
     "warm-table-appropriate-dept.trycloudflare.com",
+    "thoroughly-imagination-pam-shake.trycloudflare.com",
+    "cpu-baseline-injection-patrol.trycloudflare.com",
+    "demanding-reports-street-plugins.trycloudflare.com"
+  ];
+    "thoroughly-imagination-pam-shake.trycloudflare.com"
     "thoroughly-imagination-pam-shake.trycloudflare.com",
     "cpu-baseline-injection-patrol.trycloudflare.com"
   ];
@@ -1193,11 +1198,11 @@ async function loadXMPositions() {
     container.innerHTML = `
       <div style="display: flex; flex-direction: column; gap: 0.6rem;">
         ${positions.map(p => {
-          const isBuy = (p.type || "BUY") === "BUY";
-          const profitColor = (p.profit || 0) >= 0 ? "#10b981" : "#ef4444";
-          const profitSign = (p.profit || 0) >= 0 ? "+" : "";
+      const isBuy = (p.type || "BUY") === "BUY";
+      const profitColor = (p.profit || 0) >= 0 ? "#10b981" : "#ef4444";
+      const profitSign = (p.profit || 0) >= 0 ? "+" : "";
 
-          return `
+      return `
             <div class="xm-position-card" style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.45rem;">
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
@@ -1245,7 +1250,7 @@ async function loadXMPositions() {
               </div>
             </div>
           `;
-        }).join("")}
+    }).join("")}
       </div>
     `;
     initIcons();
