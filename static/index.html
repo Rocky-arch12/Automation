@@ -8,7 +8,7 @@
   <title>AlphaSignal AI — Telegram Trading Signal Intelligence & Execution Engine</title>
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>α</text></svg>">
-  <link rel="stylesheet" href="./style.css?v=23">
+  <link rel="stylesheet" href="./style.css?v=24">
   <!-- Google Fonts — Inter for clean dashboard typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -44,11 +44,11 @@
         <a href="#security" class="landing-nav-link">Security Vault</a>
         <button class="btn btn-secondary" onclick="openSettingsModal()" title="Engine & Backend Connection Settings">
           <i data-lucide="settings" style="width: 14px; height: 14px;"></i>
-          Settings
+          <span class="btn-text">Settings</span>
         </button>
         <button class="btn btn-primary" onclick="navigateTo('login')">
           <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
-          Admin Access &rarr;
+          <span class="btn-text">Admin Access &rarr;</span>
         </button>
       </div>
     </nav>
@@ -292,52 +292,57 @@
       </div>
 
       <div class="header-status-group">
-        <!-- Telegram Listener Status -->
-        <div class="status-badge" id="tg-status-badge">
-          <span class="pulse-dot idle" id="tg-pulse"></span>
-          <span id="tg-status-text">Telegram: Standby</span>
-        </div>
+        <!-- Horizontally Scrollable Status Badges Tray on Mobile -->
+        <div class="status-badges-scroller">
+          <!-- Telegram Listener Status -->
+          <div class="status-badge" id="tg-status-badge">
+            <span class="pulse-dot idle" id="tg-pulse"></span>
+            <span id="tg-status-text">Telegram: Standby</span>
+          </div>
 
-        <!-- AI Provider Status -->
-        <div class="status-badge" id="ai-status-badge">
-          <i data-lucide="cpu" style="width: 14px; height: 14px; color: #60a5fa;"></i>
-          <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
-        </div>
+          <!-- AI Provider Status -->
+          <div class="status-badge" id="ai-status-badge">
+            <i data-lucide="cpu" style="width: 14px; height: 14px; color: #60a5fa;"></i>
+            <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
+          </div>
 
-        <!-- XM MT5 Broker Status -->
-        <div class="status-badge" id="xm-status-badge" onclick="openSettingsModal()"
-          style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
-          title="XM MT5 Demo Broker Execution Status (Click to configure)">
-          <i data-lucide="zap" style="width: 14px; height: 14px; color: #f59e0b;"></i>
-          <span id="xm-status-text">XM MT5: Demo Active</span>
-        </div>
+          <!-- XM MT5 Broker Status -->
+          <div class="status-badge" id="xm-status-badge" onclick="openSettingsModal()"
+            style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
+            title="XM MT5 Demo Broker Execution Status (Click to configure)">
+            <i data-lucide="zap" style="width: 14px; height: 14px; color: #f59e0b;"></i>
+            <span id="xm-status-text">XM MT5: Demo Active</span>
+          </div>
 
-        <!-- WebSocket Real-time Status -->
-        <div class="status-badge" id="ws-status-badge">
-          <i data-lucide="activity" style="width: 14px; height: 14px; color: #10b981;"></i>
-          <span id="ws-status-text">Live: Connecting...</span>
-        </div>
+          <!-- WebSocket Real-time Status -->
+          <div class="status-badge" id="ws-status-badge">
+            <i data-lucide="activity" style="width: 14px; height: 14px; color: #10b981;"></i>
+            <span id="ws-status-text">Live: Connecting...</span>
+          </div>
 
-        <!-- User Multi-Tenant Profile Badge -->
-        <div id="user-profile-badge" class="status-badge" style="display: flex; border-color: rgba(56, 189, 248, 0.4);"
-          title="Active Trader Profile">
-          <i data-lucide="shield-check" style="width: 14px; height: 14px; color: #38bdf8;"></i>
-          <span id="user-display-name">Trader</span>
+          <!-- User Multi-Tenant Profile Badge -->
+          <div id="user-profile-badge" class="status-badge" style="display: flex; border-color: rgba(56, 189, 248, 0.4);"
+            title="Active Trader Profile">
+            <i data-lucide="shield-check" style="width: 14px; height: 14px; color: #38bdf8;"></i>
+            <span id="user-display-name">Trader</span>
+          </div>
         </div>
 
         <!-- Actions -->
-        <button class="btn btn-secondary" onclick="openSettingsModal()">
-          <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
-          Settings
-        </button>
-        <button class="btn btn-secondary" onclick="logoutUser()" title="Sign out of your session">
-          <i data-lucide="log-out" style="width: 15px; height: 15px;"></i>
-          Sign Out
-        </button>
-        <button class="btn btn-danger" onclick="confirmClearData()">
-          <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
-          Clear
-        </button>
+        <div class="header-actions">
+          <button class="btn btn-secondary" onclick="openSettingsModal()" title="System Settings">
+            <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
+            <span class="btn-text">Settings</span>
+          </button>
+          <button class="btn btn-secondary" onclick="logoutUser()" title="Sign out of your session">
+            <i data-lucide="log-out" style="width: 15px; height: 15px;"></i>
+            <span class="btn-text">Sign Out</span>
+          </button>
+          <button class="btn btn-danger" onclick="confirmClearData()" title="Clear Live Stream">
+            <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
+            <span class="btn-text">Clear</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -540,8 +545,7 @@
           </div>
 
           <!-- Account Meta Bar -->
-          <div id="xm-positions-meta"
-            style="display: flex; gap: 0.75rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.85rem; margin-bottom: 0.85rem; font-size: 0.75rem;">
+          <div id="xm-positions-meta" class="xm-positions-meta">
             <div><span style="color:var(--text-dim);">Server:</span> <strong id="xm-meta-server">XMGlobal-MT5</strong>
             </div>
             <div><span style="color:var(--text-dim);">Account:</span> <strong id="xm-meta-account">#Demo</strong></div>
@@ -663,7 +667,7 @@
             your joined channels and groups.
           </p>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+          <div class="form-row-2col">
             <div class="form-group" style="margin-bottom: 0;">
               <label class="form-label">Telegram API ID</label>
               <input type="text" id="setting-tg-api-id" class="form-control" placeholder="e.g. 21434478">
@@ -704,7 +708,7 @@
             </div>
           </div>
 
-          <div style="display: flex; gap: 0.75rem; margin-top: 0.75rem;">
+          <div class="modal-btn-row">
             <button class="btn btn-primary" onclick="startMultiClientListener()" id="btn-start-multi"
               style="flex: 1; justify-content: center;">
               <i data-lucide="radio" style="width: 14px; height: 14px;"></i>
@@ -749,7 +753,7 @@
             </label>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-row-2col">
             <div class="form-group">
               <label class="form-label">XM MT5 Login (Account ID)</label>
               <input type="number" id="setting-xm-login" class="form-control" placeholder="e.g. 346554725">
@@ -817,7 +821,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=23"></script>
+  <script src="./app.js?v=24"></script>
 </body>
 
 </html>
