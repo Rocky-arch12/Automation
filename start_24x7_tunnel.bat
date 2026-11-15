@@ -1,5 +1,5 @@
 @echo off
-title AlphaSignal AI 24x7 Engine & Cloudflare Tunnel
+title AlphaSignal AI 24x7 Engine & Permanent Ngrok Tunnel
 echo ===================================================
 echo   Starting AlphaSignal AI Engine & MT5 Execution
 echo ===================================================
@@ -12,8 +12,11 @@ start "AlphaSignal Server" cmd /k "python -m uvicorn main:app --host 127.0.0.1 -
 REM Wait 3 seconds for server to initialize
 timeout /t 3 /nobreak >nul
 
-REM 2. Start Cloudflare Tunnel
-echo Starting Cloudflare 24x7 Free Tunnel...
-.\cloudflared.exe tunnel --url http://127.0.0.1:8000
+REM 2. Start Permanent Ngrok Tunnel
+echo ===================================================
+echo   Starting Permanent 24x7 Ngrok Tunnel:
+echo   https://plod-exonerate-october.ngrok-free.dev
+echo ===================================================
+.\ngrok.exe http --url=https://plod-exonerate-october.ngrok-free.dev 8000
 
 pause

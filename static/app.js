@@ -1,7 +1,7 @@
 // AlphaSignal AI Frontend Application
 
-// Active Cloudflare Tunnel Fallback
-const CURRENT_ACTIVE_TUNNEL = "https://composition-logos-settle-manually.trycloudflare.com";
+// Permanent Tunnel Endpoint (Ngrok Static Free Domain)
+const CURRENT_ACTIVE_TUNNEL = "https://plod-exonerate-october.ngrok-free.dev";
 
 // Check query param for backend URL convenience: ?backend=https://...
 const urlParams = new URLSearchParams(window.location.search);
@@ -17,14 +17,16 @@ if (urlParams.has("backend")) {
 
 function getApiBase() {
   let stored = localStorage.getItem("API_BACKEND_URL") || "";
-  // Auto-heal: If stored points to any stale/expired quick tunnel, migrate to active tunnel
+  // Auto-heal: If stored points to any stale/expired quick tunnel, migrate to permanent static tunnel
   const staleTunnels = [
+    "trycloudflare.com",
     "recorders-retirement-prostores-touch.trycloudflare.com",
     "effectiveness-welfare-multimedia-storage.trycloudflare.com",
     "warm-table-appropriate-dept.trycloudflare.com",
     "thoroughly-imagination-pam-shake.trycloudflare.com",
     "cpu-baseline-injection-patrol.trycloudflare.com",
-    "demanding-reports-street-plugins.trycloudflare.com"
+    "demanding-reports-street-plugins.trycloudflare.com",
+    "composition-logos-settle-manually.trycloudflare.com"
   ];
   if (stored && staleTunnels.some(stale => stored.includes(stale))) {
     stored = CURRENT_ACTIVE_TUNNEL;
@@ -44,6 +46,28 @@ function getApiUrl(endpoint) {
   const cleanBase = base.replace(/\/$/, "");
   return endpoint.startsWith("/") ? `${cleanBase}${endpoint}` : `${cleanBase}/${endpoint}`;
 }
+
+// Global fetch interceptor:
+// 1. Automatically routes relative /api calls to getApiUrl() when running on remote frontend (e.g. Vercel)
+// 2. Injects 'ngrok-skip-browser-warning': 'true' so ngrok free tier never serves interstitial pages
+const _nativeFetch = window.fetch;
+window.fetch = function (resource, init = {}) {
+  let url = resource;
+  if (typeof resource === "string" && resource.startsWith("/api")) {
+    url = getApiUrl(resource);
+  }
+  init = init || {};
+  let headers = init.headers;
+  if (!headers) {
+    headers = { "ngrok-skip-browser-warning": "true" };
+  } else if (headers instanceof Headers) {
+    headers.set("ngrok-skip-browser-warning", "true");
+  } else if (typeof headers === "object") {
+    headers["ngrok-skip-browser-warning"] = "true";
+  }
+  init.headers = headers;
+  return _nativeFetch.call(this, url, init);
+};
 
 function getAuthToken() {
   return localStorage.getItem("AUTH_TOKEN") || "";
