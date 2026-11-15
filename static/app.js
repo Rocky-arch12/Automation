@@ -1,7 +1,7 @@
 // AlphaSignal AI Frontend Application
 
 // Active Cloudflare Tunnel Fallback
-const CURRENT_ACTIVE_TUNNEL = "https://effectiveness-welfare-multimedia-storage.trycloudflare.com";
+const CURRENT_ACTIVE_TUNNEL = "https://warm-table-appropriate-dept.trycloudflare.com";
 
 // Check query param for backend URL convenience: ?backend=https://...
 const urlParams = new URLSearchParams(window.location.search);
@@ -17,13 +17,14 @@ if (urlParams.has("backend")) {
 
 function getApiBase() {
   let stored = localStorage.getItem("API_BACKEND_URL") || "";
-  // Auto-heal: If stored points to the previous stale/expired tunnel, migrate to active tunnel
-  if (stored && (stored.includes("recorders-retirement-prostores-touch.trycloudflare.com") || stored.includes("trycloudflare.com") && stored !== CURRENT_ACTIVE_TUNNEL)) {
-    // If the old one is known dead, replace with CURRENT_ACTIVE_TUNNEL
-    if (stored.includes("recorders-retirement-prostores-touch.trycloudflare.com")) {
-      stored = CURRENT_ACTIVE_TUNNEL;
-      localStorage.setItem("API_BACKEND_URL", CURRENT_ACTIVE_TUNNEL);
-    }
+  // Auto-heal: If stored points to any stale/expired quick tunnel, migrate to active tunnel
+  const staleTunnels = [
+    "recorders-retirement-prostores-touch.trycloudflare.com",
+    "effectiveness-welfare-multimedia-storage.trycloudflare.com"
+  ];
+  if (stored && staleTunnels.some(stale => stored.includes(stale))) {
+    stored = CURRENT_ACTIVE_TUNNEL;
+    localStorage.setItem("API_BACKEND_URL", CURRENT_ACTIVE_TUNNEL);
   }
   // If running on Vercel or remote host and no custom backend set, default to active tunnel
   if (!stored && (window.location.hostname.includes("vercel.app") || (!window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1")))) {
@@ -646,66 +647,109 @@ function handleIncomingMessage(data) {
 // Filters & Search
 function setFilter(filter, btn) {
   currentFilter = filter;
-  document.querySelectorAll(".filter-tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".filter-tab, .filter-btn").forEach(t => {
+    if ((t.dataset && t.dataset.filter === filter) || t.innerText.trim().toUpperCase() === filter.toUpperCase()) {
+      t.classList.add("active");
+    } else {
+      t.classList.remove("active");
+    }
+  });
   if (btn) btn.classList.add("active");
   loadMessages();
+}
+
+function handleSearch(val) {
+  currentSearch = (val || "").trim();
+  debounceSearch();
 }
 
 function debounceSearch() {
   clearTimeout(searchTimeout);
   searchTimeout = setTimeout(() => {
-    currentSearch = document.getElementById("feed-search").value.trim();
+    const searchInput = document.getElementById("signal-search") || document.getElementById("feed-search");
+    if (searchInput) currentSearch = searchInput.value.trim();
     loadMessages();
   }, 300);
 }
 
 // Tab Switching
+function switchTab(tabId, btn) {
+  switchRightTab(tabId, btn);
+}
+
 function switchRightTab(tabId, btn) {
-  document.querySelectorAll(".tab-nav-btn").forEach(b => b.classList.remove("active"));
-  if (btn) btn.classList.add("active");
-  else {
-    const tabBtns = document.querySelectorAll(".tab-nav-btn");
-    if (tabId === "simulator" && tabBtns[0]) tabBtns[0].classList.add("active");
-    if (tabId === "watchlist" && tabBtns[1]) tabBtns[1].classList.add("active");
-    if (tabId === "terminal" && tabBtns[2]) tabBtns[2].classList.add("active");
+  document.querySelectorAll(".tab-nav-btn, .tab-btn").forEach(b => b.classList.remove("active"));
+  if (btn) {
+    btn.classList.add("active");
+  } else {
+    const targetBtn = document.getElementById(`tab-btn-${tabId}`);
+    if (targetBtn) {
+      targetBtn.classList.add("active");
+    } else {
+      const allBtns = document.querySelectorAll(".tab-nav-btn, .tab-btn");
+      if (tabId === "simulator" && allBtns[0]) allBtns[0].classList.add("active");
+      if (tabId === "watchlist" && allBtns[1]) allBtns[1].classList.add("active");
+      if (tabId === "terminal" && allBtns[2]) allBtns[2].classList.add("active");
+    }
   }
 
-  document.getElementById("tab-simulator").style.display = tabId === "simulator" ? "block" : "none";
-  document.getElementById("tab-watchlist").style.display = tabId === "watchlist" ? "block" : "none";
-  document.getElementById("tab-terminal").style.display = tabId === "terminal" ? "block" : "none";
+  const simEl = document.getElementById("tab-simulator");
+  const watchEl = document.getElementById("tab-watchlist");
+  const termEl = document.getElementById("tab-terminal");
+
+  if (simEl) simEl.style.display = tabId === "simulator" ? "block" : "none";
+  if (watchEl) watchEl.style.display = tabId === "watchlist" ? "block" : "none";
+  if (termEl) termEl.style.display = tabId === "terminal" ? "block" : "none";
 
   if (tabId === "watchlist") {
     loadTrades();
+  } else if (tabId === "terminal") {
+    loadLogs();
+  }
+  initIcons();
+}
+
+// Preset Prompts for instant testing of all signal intents & outcomes
+function injectPreset(type) {
+  const presetMap = {
+    "PENDING": "BE READY ON THIS LEVEL 4052.90 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 4049.93 TP 4070.21",
+    "TAPPED": "LEVEL TAPED",
+    "NEGATION": "active mat krna abhi",
+    "ACTIVE": "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
+    "EARLY_ACTIVE": "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
+    "PARTIAL_1_TO_1": "1:1 DONE You can book partial profit here 🚀 safe traders can book",
+    "PARTIAL": "1:1 DONE You can book partial profit here 🚀 safe traders can book",
+    "RISK_FREE": "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
+    "BREAKEVEN": "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
+    "FULL_TP": "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
+    "TP_HIT": "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
+    "SL_HIT": "SL HIT on gold trade. Respect risk management, closed.",
+    "NOT_TAPPED": "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
+    "CANCEL": "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
+    "CHATTER": "ye crazyy hogya guyss enjoy your weekend, 5/5 trades smashed! party hard!",
+    "gold_buy": "BUY GOLD NOW 2642.50 SL 2636.00 TP1 2648.00 TP2 2656.00",
+    "btc_short": "BTC SHORT NOW 91250 SL 91900 TP1 90400 TP2 89500"
+  };
+
+  const keyUpper = String(type || "").toUpperCase().trim();
+  const text = presetMap[keyUpper] || presetMap[type] || type;
+
+  const simTextEl = document.getElementById("sim-text");
+  if (simTextEl && text) {
+    simTextEl.value = text;
+    simTextEl.focus();
+    simTextEl.style.borderColor = "#38bdf8";
+    setTimeout(() => { simTextEl.style.borderColor = ""; }, 500);
   }
 }
 
-// Preset Prompts for instant testing of the 6 outcomes
 function applyPreset(key) {
-  const presets = {
-    pending_setup: "BE READY ON THIS LEVEL 4052.90 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 4049.93 TP 4070.21",
-    level_tapped: "LEVEL TAPED",
-    negation_wait: "active mat krna abhi",
-    early_active: "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
-    partial_1to1: "1:1 DONE You can book partial profit here 🚀 safe traders can book",
-    risk_free: "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
-    full_tp: "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
-    sl_hit: "SL HIT on gold trade. Respect risk management, closed.",
-    level_not_tapped: "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
-    weekend_chatter: "ye crazyy hogya guyss enjoy your weekend, 5/5 trades smashed! party hard!",
-    gold_buy: "BUY GOLD NOW 2642.50 SL 2636.00 TP1 2648.00 TP2 2656.00",
-    btc_short: "BTC SHORT NOW 91250 SL 91900 TP1 90400 TP2 89500"
-  };
-
-  const text = presets[key];
-  if (text) {
-    document.getElementById("sim-text").value = text;
-    document.getElementById("sim-text").focus();
-  }
+  injectPreset(key);
 }
 
 // Drag and Drop & File Selection
 function setupDragAndDrop() {
-  const dropzone = document.getElementById("dropzone");
+  const dropzone = document.getElementById("drop-zone") || document.getElementById("dropzone");
   if (!dropzone) return;
 
   ["dragenter", "dragover"].forEach(event => {
@@ -723,29 +767,54 @@ function setupDragAndDrop() {
   });
 
   dropzone.addEventListener("drop", (e) => {
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFile(e.dataTransfer.files[0]);
     }
   });
 }
 
+function handleFileSelect(e) {
+  const files = e && e.target ? e.target.files : (e && e.files ? e.files : []);
+  if (files && files.length > 0) {
+    handleFile(files[0]);
+  }
+}
+
 function handleFileSelected(input) {
-  if (input.files && input.files.length > 0) {
+  if (input && input.files && input.files.length > 0) {
     handleFile(input.files[0]);
   }
 }
 
 function handleFile(file) {
   selectedFile = file;
-  document.getElementById("file-name-text").innerText = file.name;
-  document.getElementById("file-preview-badge").style.display = "inline-flex";
+
+  const nameEl = document.getElementById("preview-filename") || document.getElementById("file-name-text");
+  if (nameEl) nameEl.innerText = file.name;
+
+  const thumbEl = document.getElementById("preview-thumbnail");
+  if (thumbEl) {
+    const reader = new FileReader();
+    reader.onload = (e) => { thumbEl.src = e.target.result; };
+    reader.readAsDataURL(file);
+  }
+
+  const previewArea = document.getElementById("file-preview-area") || document.getElementById("file-preview-badge");
+  if (previewArea) previewArea.style.display = "flex";
+}
+
+function clearSelectedFile(e) {
+  if (e && e.stopPropagation) e.stopPropagation();
+  selectedFile = null;
+  const fileInput = document.getElementById("sim-file");
+  if (fileInput) fileInput.value = "";
+
+  const previewArea = document.getElementById("file-preview-area") || document.getElementById("file-preview-badge");
+  if (previewArea) previewArea.style.display = "none";
 }
 
 function clearFileSelected(e) {
-  if (e) e.stopPropagation();
-  selectedFile = null;
-  document.getElementById("sim-file").value = "";
-  document.getElementById("file-preview-badge").style.display = "none";
+  clearSelectedFile(e);
 }
 
 // Submit Simulation
@@ -754,16 +823,18 @@ async function submitSimulation(e) {
   const text = document.getElementById("sim-text").value.trim();
   const sender = document.getElementById("sim-sender").value.trim() || "Channel Owner";
   const channel = document.getElementById("sim-channel").value.trim() || "VIP Signals";
-  const submitBtn = document.getElementById("sim-submit-btn");
+  const submitBtn = document.getElementById("btn-sim-submit") || document.getElementById("sim-submit-btn");
 
   if (!text && !selectedFile) {
     showToast("Please enter message text or attach a chart screenshot.", "error");
     return;
   }
 
-  submitBtn.disabled = true;
-  submitBtn.innerHTML = `<i data-lucide="loader" class="animate-spin" style="width: 16px; height: 16px;"></i> Analyzing Intent with AI...`;
-  initIcons();
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 16px; height: 16px;"></i> Analyzing Intent with AI...`;
+    initIcons();
+  }
 
   const formData = new FormData();
   formData.append("text", text);
@@ -782,20 +853,29 @@ async function submitSimulation(e) {
 
     // Clear inputs
     document.getElementById("sim-text").value = "";
-    clearFileSelected();
+    clearSelectedFile();
     showToast("Signal simulated & parsed successfully!", "success");
 
-    // Switch to feed view
-    const cardEl = document.getElementById(`msg-card-${result.result.message_id}`);
-    if (cardEl) {
-      cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
+    // Refresh feed and stats
+    loadMessages();
+    loadStats();
+    loadTrades();
+
+    // Scroll to new card if present
+    setTimeout(() => {
+      const cardEl = document.getElementById(`msg-card-${result.result ? result.result.message_id : ''}`);
+      if (cardEl) {
+        cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 400);
   } catch (err) {
     showToast(`Simulation failed: ${err.message}`, "error");
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.innerHTML = `<i data-lucide="send" style="width: 16px; height: 16px;"></i> Send & Interpret Intent Instantly`;
-    initIcons();
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `<i data-lucide="send" style="width: 16px; height: 16px;"></i> Process &amp; Filter with AI`;
+      initIcons();
+    }
   }
 }
 

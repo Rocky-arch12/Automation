@@ -502,6 +502,8 @@ body > * {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .panel-title {
@@ -510,41 +512,74 @@ body > * {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  flex: 1;
+  max-width: 220px;
+  transition: all 0.2s ease;
+}
+
+.search-box:focus-within {
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+}
+
+.search-box input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f1f5f9;
+  font-size: 0.78rem;
+  width: 100%;
+}
+
+.search-box input::placeholder {
+  color: var(--text-dim);
 }
 
 /* Feed Filters — [ReactBits: Dock-style tab bar] */
-.filter-tabs {
+.filter-tabs, .filter-group {
   display: flex;
   gap: 0.25rem;
   background: rgba(10, 14, 23, 0.7);
   padding: 0.25rem;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.filter-tab {
-  padding: 0.3rem 0.7rem;
+.filter-tab, .filter-btn {
+  padding: 0.32rem 0.65rem;
   font-size: 0.75rem;
   font-weight: 600;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   position: relative;
 }
 
-.filter-tab:hover {
+.filter-tab:hover, .filter-btn:hover {
   color: var(--text-main);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(56, 189, 248, 0.1);
 }
 
 /* [ReactBits: Animated Content] — Active tab with smooth slide */
-.filter-tab.active {
-  background: var(--accent-blue);
-  color: white;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+.filter-tab.active, .filter-btn.active {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
   transform: scale(1.02);
 }
 
@@ -846,36 +881,43 @@ body > * {
   overflow: hidden;
 }
 
-.tab-nav {
+.tab-nav, .right-tabs-header {
   display: flex;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(17, 24, 39, 0.3);
-  gap: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.6);
+  gap: 4px;
+  padding: 6px 8px 0;
+  border-radius: 12px 12px 0 0;
 }
 
-.tab-nav-btn {
-  padding: 0.75rem 1.25rem;
+.tab-nav-btn, .tab-btn {
+  padding: 0.65rem 1.1rem;
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-muted);
   background: transparent;
-  border: none;
-  cursor: pointer;
+  border: 1px solid transparent;
   border-bottom: 2px solid transparent;
-  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  position: relative;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  transition: all 0.2s ease;
+  outline: none;
 }
 
-.tab-nav-btn:hover {
+.tab-nav-btn:hover, .tab-btn:hover {
   color: #93c5fd;
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(59, 130, 246, 0.08);
 }
 
-.tab-nav-btn.active {
-  color: #60a5fa;
-  border-bottom-color: #60a5fa;
-  background: rgba(59, 130, 246, 0.08);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+.tab-nav-btn.active, .tab-btn.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.25);
+  border-bottom-color: #38bdf8;
+  box-shadow: 0 2px 10px rgba(56, 189, 248, 0.15);
 }
 
 .tab-content {
@@ -887,8 +929,12 @@ body > * {
 /* ============================================================
    Preset Chips — [ReactBits: Magnetic hover effect]
    ============================================================ */
-.presets-group {
+.simulator-presets-bar, .presets-group {
   margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
 }
 
 .presets-label {
@@ -900,40 +946,39 @@ body > * {
   letter-spacing: 0.05em;
 }
 
-.chips-wrap {
+.presets-row, .chips-wrap {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.45rem;
 }
 
-.chip-btn {
+.preset-btn, .chip-btn {
   background: rgba(30, 41, 59, 0.6);
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: #e2e8f0;
-  padding: 0.38rem 0.7rem;
+  padding: 0.4rem 0.75rem;
   border-radius: 8px;
-  font-size: 0.75rem;
+  font-size: 0.74rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   backdrop-filter: blur(4px);
+  outline: none;
 }
 
-.chip-btn:hover {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.5);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
-  transform: translateY(-2px) scale(1.02);
+.preset-btn:hover, .chip-btn:hover {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+  transform: translateY(-1px);
 }
 
-.chip-btn:active {
-  transform: translateY(0) scale(0.98);
-}
-
-.chip-btn.active {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: var(--accent-blue);
-  color: white;
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+.preset-btn:active, .chip-btn:active {
+  transform: translateY(0);
 }
 
 /* ============================================================
