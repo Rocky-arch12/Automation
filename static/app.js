@@ -1,16 +1,36 @@
 // AlphaSignal AI Frontend Application
 
+// Active Cloudflare Tunnel Fallback
+const CURRENT_ACTIVE_TUNNEL = "https://effectiveness-welfare-multimedia-storage.trycloudflare.com";
+
 // Check query param for backend URL convenience: ?backend=https://...
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.has("backend")) {
   const backendParam = urlParams.get("backend").trim().replace(/\/$/, "");
   if (backendParam) {
     localStorage.setItem("API_BACKEND_URL", backendParam);
+    try {
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    } catch (e) {}
   }
 }
 
 function getApiBase() {
-  return localStorage.getItem("API_BACKEND_URL") || "";
+  let stored = localStorage.getItem("API_BACKEND_URL") || "";
+  // Auto-heal: If stored points to the previous stale/expired tunnel, migrate to active tunnel
+  if (stored && (stored.includes("recorders-retirement-prostores-touch.trycloudflare.com") || stored.includes("trycloudflare.com") && stored !== CURRENT_ACTIVE_TUNNEL)) {
+    // If the old one is known dead, replace with CURRENT_ACTIVE_TUNNEL
+    if (stored.includes("recorders-retirement-prostores-touch.trycloudflare.com")) {
+      stored = CURRENT_ACTIVE_TUNNEL;
+      localStorage.setItem("API_BACKEND_URL", CURRENT_ACTIVE_TUNNEL);
+    }
+  }
+  // If running on Vercel or remote host and no custom backend set, default to active tunnel
+  if (!stored && (window.location.hostname.includes("vercel.app") || (!window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1")))) {
+    stored = CURRENT_ACTIVE_TUNNEL;
+    localStorage.setItem("API_BACKEND_URL", CURRENT_ACTIVE_TUNNEL);
+  }
+  return stored;
 }
 
 function getApiUrl(endpoint) {
@@ -36,11 +56,6 @@ function getAuthUser() {
 const _origFetch = window.fetch;
 window.fetch = function (url, options) {
   if (typeof url === "string" && (url.startsWith("/api") || url.startsWith("/uploads"))) {
-    // If running on Vercel and backend is not set yet, reject gracefully instead of fetching non-existent Vercel route
-    if (window.location.hostname.includes("vercel.app") && !getApiBase()) {
-      return Promise.reject(new Error("Cloudflare Tunnel URL not configured yet. Open Settings to paste your backend URL."));
-    }
-
     // Attach JWT Authorization Header and HttpOnly cookie support
     options = options || {};
     options.credentials = "include";
@@ -72,6 +87,15 @@ window.fetch = function (url, options) {
         }
       }
       return res;
+    }).catch(err => {
+      if (err.message && err.message.includes("Failed to fetch")) {
+        const currentBase = getApiBase();
+        console.error("Backend fetch failed for endpoint:", url, "Target base:", currentBase);
+        if (window.location.hostname.includes("vercel.app")) {
+          showToast(`Engine connection failed (${currentBase || 'missing'}). Click 'Settings' to update your Cloudflare Tunnel URL.`, "error");
+        }
+      }
+      throw err;
     });
   }
   return _origFetch(url, options);
