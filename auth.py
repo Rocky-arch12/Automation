@@ -188,6 +188,6 @@ async def get_current_authorized_user(request: Request, authorization: Optional[
     if not is_email_authorized(user_email):
         raise HTTPException(
             status_code=403,
-            detail=f"Access Denied: Account '{user_email}' is not authorized. Only whitelisted administrators (riddhesh.firake@gmail.com, acc94926@gmail.com) may access this trading vault."
+            detail=f"Access Denied: Account '{user_email}' is not authorized."
         )
     return user

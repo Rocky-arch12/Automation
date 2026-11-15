@@ -375,7 +375,7 @@ class GoogleAuthRequest(BaseModel):
 async def register_user():
     raise HTTPException(
         status_code=403,
-        detail="Public account registration is disabled. This system is strictly locked to whitelisted administrator accounts (riddhesh.firake@gmail.com, acc94926@gmail.com)."
+        detail="Public account registration is disabled. This system is strictly locked to whitelisted administrator accounts."
     )
 
 @app.post("/api/auth/login")
@@ -454,7 +454,7 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
         await log_event("WARNING", "AUTH_DENIED", f"Unauthorized Google OAuth attempt blocked: {email}")
         raise HTTPException(
             status_code=403,
-            detail=f"Access Denied: Google account '{email}' is not authorized. Access is strictly restricted to riddhesh.firake@gmail.com and acc94926@gmail.com."
+            detail=f"Access Denied: Google account '{email}' is not authorized. Access is strictly restricted."
         )
 
     user = await get_user_by_email(email)
@@ -480,7 +480,7 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
 async def demo_guest_login():
     raise HTTPException(
         status_code=403,
-        detail="Public demo guest access is disabled for live trading security. Only authorized Google accounts (riddhesh.firake@gmail.com, acc94926@gmail.com) may enter."
+        detail="Public demo guest access is disabled for live trading security. Only authorized Google accounts may enter."
     )
 
 @app.post("/api/auth/logout")

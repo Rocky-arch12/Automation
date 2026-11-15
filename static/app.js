@@ -68,13 +68,13 @@ window.fetch = function (url, options = {}) {
     targetUrl = getApiUrl(url);
     options = options || {};
     options.credentials = "include";
-    
+
     // Normalize headers
     let headers = options.headers;
     if (!headers) {
       headers = {};
     }
-    
+
     if (headers instanceof Headers) {
       if (!headers.has("ngrok-skip-browser-warning")) {
         headers.set("ngrok-skip-browser-warning", "true");
@@ -1634,7 +1634,7 @@ function handleGoogleSignIn() {
 }
 
 async function continueAsDemo() {
-  showToast("Demo access is disabled. Please sign in with an authorized Google account (riddhesh.firake@gmail.com or acc94926@gmail.com).", "warning");
+  showToast("Demo access is disabled. Please sign in with an authorized Google account.", "warning");
   navigateTo("login");
 }
 
