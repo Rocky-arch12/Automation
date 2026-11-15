@@ -8,8 +8,8 @@
   <title>AlphaSignal AI — Telegram Trading Signal Intelligence & Execution Engine</title>
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>α</text></svg>">
-  <link rel="stylesheet" href="./style.css?v=24">
-  <!-- Google Fonts — Inter for clean dashboard typography -->
+  <link rel="stylesheet" href="./style.css?v=25">
+  <!-- Google Fonts — Inter (UI) + JetBrains Mono (numbers/code) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -22,22 +22,25 @@
 </head>
 
 <body>
-  <!-- [ReactBits: Particles / Sparkles] — Floating background particles -->
   <canvas id="sparkle-canvas"></canvas>
 
   <!-- ============================================================
-       VIEW 1: PUBLIC LANDING PAGE (Default for all visitors)
+       VIEW 1: PUBLIC LANDING PAGE
        ============================================================ -->
   <div id="view-landing" class="spa-view">
-    <!-- Landing Navigation -->
-    <nav class="landing-nav">
+    <nav class="landing-nav" id="landing-nav">
       <div class="brand-area" style="cursor: pointer;" onclick="navigateTo('landing')">
         <div class="brand-logo">α</div>
         <div>
-          <h1 class="brand-title" style="font-size: 1.25rem;">AlphaSignal AI</h1>
-          <p class="brand-tagline" style="font-size: 0.72rem;">Autonomous Telegram Signal Intelligence & MT5 Engine</p>
+          <h1 class="brand-title">AlphaSignal AI</h1>
+          <p class="brand-tagline">Autonomous Telegram Signal Intelligence & MT5 Engine</p>
         </div>
       </div>
+
+      <button class="landing-menu-btn" onclick="toggleMobileMenu()" aria-label="Toggle navigation menu">
+        <i data-lucide="menu"></i>
+      </button>
+
       <div class="landing-nav-links">
         <a href="#features" class="landing-nav-link">Features</a>
         <a href="#architecture" class="landing-nav-link">1:1 Trailing</a>
@@ -53,28 +56,27 @@
       </div>
     </nav>
 
-    <!-- Landing Hero -->
     <header class="landing-hero">
       <div class="landing-badge">
-        <span class="pulse-dot active" style="margin: 0;"></span>
+        <span class="pulse-dot" style="margin: 0;"></span>
         Next-Gen Multi-Tenant Trading Infrastructure
       </div>
       <h1 class="landing-title">
         Transform Telegram Signal Chaos Into Flawless, Automated MT5 Trades
       </h1>
       <p class="landing-subtitle">
-        Zero-noise AI intent parsing, strict 0.02 lot Gold / 0.04 lot Bitcoin sizing, automated 1:1 Breakeven scale-out
-        with 1:2 expansion, multi-channel Telegram harvesting, and zero-knowledge AES-256 encrypted profiles.
+        Zero-noise AI intent parsing, strict 0.02 lot Gold / 0.04 lot Bitcoin sizing, automated 1:1 Breakeven
+        scale-out with 1:2 expansion, multi-channel Telegram harvesting, and zero-knowledge AES-256 encrypted
+        profiles.
       </p>
 
       <div class="landing-cta-group">
-        <button class="btn btn-primary btn-lg" onclick="handleDashboardAccess()"
-          style="box-shadow: 0 0 25px rgba(56, 189, 248, 0.4);">
+        <button class="btn btn-primary btn-lg" onclick="handleDashboardAccess()">
           <i data-lucide="layout-dashboard"></i>
           Launch Live Dashboard
         </button>
         <button class="btn btn-secondary btn-lg" onclick="navigateTo('login')">
-          <i data-lucide="shield-check" style="color: #38bdf8;"></i>
+          <i data-lucide="shield-check" style="color: var(--info-text);"></i>
           Authorized Sign In &rarr;
         </button>
       </div>
@@ -82,61 +84,48 @@
       <!-- Live Interactive Signal Execution Preview -->
       <div class="landing-preview-container" id="architecture">
         <div class="preview-header">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <i data-lucide="radio" style="width: 16px; height: 16px; color: #38bdf8;"></i>
-            <span style="font-size: 0.85rem; font-weight: 700; color: #fff; letter-spacing: 0.04em;">LIVE ENGINE
-              TELEMETRY & TRAILING LOGIC</span>
+          <div class="preview-header-title">
+            <i data-lucide="radio" style="width: 16px; height: 16px; color: var(--info-text);"></i>
+            <span class="preview-header-label">LIVE ENGINE TELEMETRY &amp; TRAILING LOGIC</span>
           </div>
-          <span class="preview-tag"
-            style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);">
-            1:1 Scale-Out Active
-          </span>
+          <span class="preview-tag preview-tag-success">1:1 Scale-Out Active</span>
         </div>
 
-        <div
-          style="background: rgba(15, 23, 42, 0.7); border-radius: 12px; padding: 1.25rem; border: 1px solid rgba(255, 255, 255, 0.06);">
-          <div
-            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 8px;">
-            <div>
-              <span
-                style="font-size: 1.2rem; font-weight: 900; color: #f59e0b; font-family: 'JetBrains Mono', monospace;">XAUUSD
-                (GOLD)</span>
-              <span
-                style="font-size: 0.75rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 700; margin-left: 8px;">BUY
-                0.02 LOTS</span>
+        <div class="preview-trade-block">
+          <div class="preview-trade-top">
+            <div class="preview-trade-id">
+              <span class="preview-symbol">XAUUSD (GOLD)</span>
+              <span class="preview-lot-pill">BUY 0.02 LOTS</span>
             </div>
-            <div
-              style="font-size: 0.75rem; color: #34d399; font-weight: 700; background: rgba(16, 185, 129, 0.15); padding: 0.25rem 0.6rem; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.3);">
-              ✓ 1:1 HIT: 0.01 EXITED • SL @ BREAKEVEN • TP @ 1:2
+            <div class="preview-status-pill">
+              <i data-lucide="check-circle-2" style="width: 13px; height: 13px;"></i>
+              1:1 HIT: 0.01 EXITED • SL @ BREAKEVEN • TP @ 1:2
             </div>
           </div>
 
-          <div
-            style="font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #cbd5e1; line-height: 1.6; margin-bottom: 1rem;">
-            <div>&bull; Entry: <span style="color: #fff; font-weight: 700;">2640.50</span> &nbsp;|&nbsp; Initial SL:
-              <span style="color: #f87171;">2634.00</span> (Distance: $6.50)
-            </div>
-            <div>&bull; Trailed SL: <span style="color: #34d399; font-weight: 700;">2640.50 (Break Even)</span>
-              &nbsp;|&nbsp; Extended TP: <span style="color: #38bdf8; font-weight: 700;">2653.50 (1:2 Target)</span>
-            </div>
+          <div class="preview-trade-prices">
+            <div>&bull; Entry: <span class="preview-pr-strong">2640.50</span> &nbsp;|&nbsp; Initial SL:
+              <span class="preview-pr-red">2634.00</span> (Distance: $6.50)</div>
+            <div>&bull; Trailed SL: <span class="preview-pr-green">2640.50 (Break Even)</span> &nbsp;|&nbsp;
+              Extended TP: <span class="preview-pr-blue">2653.50 (1:2 Target)</span></div>
           </div>
 
           <div class="preview-grid">
             <div class="preview-stat">
               <div class="preview-stat-label">AI Processing Latency</div>
-              <div class="preview-stat-value" style="color: #60a5fa;">210 ms</div>
+              <div class="preview-stat-value" style="color: var(--info-text);">210 ms</div>
             </div>
             <div class="preview-stat">
               <div class="preview-stat-label">Intent Confidence</div>
-              <div class="preview-stat-value" style="color: #34d399;">99.4%</div>
+              <div class="preview-stat-value" style="color: var(--success-text);">99.4%</div>
             </div>
             <div class="preview-stat">
               <div class="preview-stat-label">Lot Size Normalization</div>
-              <div class="preview-stat-value" style="color: #f59e0b;">0.02 Fixed</div>
+              <div class="preview-stat-value" style="color: var(--warning-text);">0.02 Fixed</div>
             </div>
             <div class="preview-stat">
               <div class="preview-stat-label">Risk Profile</div>
-              <div class="preview-stat-value" style="color: #38bdf8;">Risk-Free (BE)</div>
+              <div class="preview-stat-value" style="color: var(--primary);">Risk-Free (BE)</div>
             </div>
           </div>
         </div>
@@ -145,8 +134,8 @@
 
     <!-- Features Section -->
     <section class="landing-features-grid" id="features">
-      <div class="feature-card">
-        <div class="feature-icon-wrapper" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa;">
+      <article class="feature-card">
+        <div class="feature-icon-wrapper" style="background: var(--primary-soft); color: var(--info-text);">
           <i data-lucide="cpu" style="width: 22px; height: 22px;"></i>
         </div>
         <h3 class="feature-title">Zero-Noise LLM Parsing</h3>
@@ -154,10 +143,10 @@
           Groq Llama 3.3 and Gemini Vision accurately identify trade intent from trader slang, typos, emojis, and raw
           chart screenshots while rejecting casual chatter.
         </p>
-      </div>
+      </article>
 
-      <div class="feature-card">
-        <div class="feature-icon-wrapper" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">
+      <article class="feature-card" id="security">
+        <div class="feature-icon-wrapper" style="background: var(--success-soft); color: var(--success-text);">
           <i data-lucide="shield-check" style="width: 22px; height: 22px;"></i>
         </div>
         <h3 class="feature-title">Automated 1:1 Scale-Out</h3>
@@ -165,10 +154,10 @@
           When price hits 1:1 Risk-to-Reward, the engine automatically closes 50% lots, drags the Stop Loss directly to
           entry (Break Even), and stretches Take Profit to 1:2.
         </p>
-      </div>
+      </article>
 
-      <div class="feature-card">
-        <div class="feature-icon-wrapper" style="background: rgba(168, 85, 247, 0.15); color: #c084fc;">
+      <article class="feature-card">
+        <div class="feature-icon-wrapper" style="background: var(--purple-soft); color: var(--purple-text);">
           <i data-lucide="radio" style="width: 22px; height: 22px;"></i>
         </div>
         <h3 class="feature-title">Multi-Channel Telegram Harvester</h3>
@@ -176,10 +165,10 @@
           Auto-fetches all your joined Telegram groups and channels. Select and monitor multiple sources simultaneously
           without typing channel IDs.
         </p>
-      </div>
+      </article>
 
-      <div class="feature-card" id="security">
-        <div class="feature-icon-wrapper" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">
+      <article class="feature-card">
+        <div class="feature-icon-wrapper" style="background: var(--warning-soft); color: var(--warning-text);">
           <i data-lucide="lock" style="width: 22px; height: 22px;"></i>
         </div>
         <h3 class="feature-title">AES-256 Zero-Knowledge Vault</h3>
@@ -187,62 +176,53 @@
           Every user profile is 100% isolated. XM MT5 credentials, passwords, and API keys are stored encrypted at rest
           using AES-256 with HttpOnly session cookies.
         </p>
-      </div>
+      </article>
     </section>
 
-    <!-- Landing Footer -->
     <footer class="landing-footer">
-      <div
-        style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+      <div class="landing-footer-inner">
         <div>&copy; 2026 AlphaSignal AI. Built for institutional-grade autonomous execution.</div>
-        <div style="display: flex; gap: 1.5rem;">
-          <a href="#" onclick="navigateTo('login')" style="color: #60a5fa; text-decoration: none;">Admin Access</a>
-        </div>
+        <a href="#" onclick="navigateTo('login')">Admin Access</a>
       </div>
     </footer>
   </div>
 
 
   <!-- ============================================================
-       VIEW 2: DEDICATED AUTH / LOGIN & REGISTER PAGE
+       VIEW 2: AUTH / LOGIN PAGE
        ============================================================ -->
   <div id="view-login" class="spa-view" style="display: none;">
     <div class="auth-page-container">
       <div class="auth-box">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div class="auth-box-top">
           <button class="btn btn-secondary btn-sm" onclick="navigateTo('landing')">
-            &larr; Back to Home
+            <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i>
+            Back to Home
           </button>
-          <div class="brand-logo" style="width: 38px; height: 38px; font-size: 1.2rem;">α</div>
+          <div class="brand-logo auth-box-logo">α</div>
         </div>
 
-        <div style="text-align: center; margin-bottom: 1.5rem;">
-          <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 4px;" id="auth-view-title">Admin
-            Access Vault</h2>
-          <p style="font-size: 0.8rem; color: var(--text-dim);" id="auth-view-subtitle">Restricted to authorized
-            administrator Google accounts</p>
+        <div class="auth-box-heading">
+          <h2 class="auth-box-title" id="auth-view-title">Admin Access Vault</h2>
+          <p class="auth-box-subtitle" id="auth-view-subtitle">Restricted to authorized administrator Google accounts</p>
         </div>
 
         <!-- Whitelisted Security Notice -->
-        <div
-          style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 14px; margin-bottom: 1.5rem; font-size: 0.8rem; color: #38bdf8; line-height: 1.5;">
-          <div
-            style="font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: #67e8f9; font-size: 0.85rem;">
+        <div class="auth-notice">
+          <div class="auth-notice-title">
             <i data-lucide="shield-check" style="width: 16px; height: 16px;"></i>
             Strict Google OAuth Whitelist
           </div>
           Access requires authenticating via Google. Only the following whitelisted Google accounts are permitted:
-          <ul style="margin: 6px 0 0 1.25rem; padding: 0; color: #ffffff; font-weight: 600;">
+          <ul class="auth-notice-list">
             <li>rxxxxxxh.fxxxxe@gmail.com</li>
             <li>axxxxxx6@gmail.com</li>
           </ul>
         </div>
 
         <!-- Google OAuth Official Sign-In Button -->
-        <div id="g_id_signin_container"
-          style="display: flex; justify-content: center; margin-bottom: 0.85rem; width: 100%;"></div>
-        <button class="btn w-full" id="google-direct-auth-btn" onclick="triggerGoogleOAuthRedirect()"
-          style="display: flex; align-items: center; justify-content: center; gap: 12px; background: #ffffff; color: #1e293b; font-weight: 700; border: none; padding: 0.85rem; border-radius: 10px; margin-bottom: 1rem; font-size: 0.95rem; box-shadow: 0 4px 14px rgba(0,0,0,0.25); transition: all 0.2s;">
+        <div id="g_id_signin_container" class="auth-google-gis"></div>
+        <button class="btn w-full auth-google-btn" id="google-direct-auth-btn" onclick="triggerGoogleOAuthRedirect()">
           <svg style="width: 20px; height: 20px;" viewBox="0 0 24 24">
             <path fill="#4285F4"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -257,20 +237,17 @@
         </button>
 
         <!-- Backend Engine Settings Link -->
-        <div style="margin-top: 0.75rem; text-align: center;">
-          <button type="button" class="btn btn-secondary w-full" onclick="openSettingsModal()"
-            style="font-size: 0.75rem; color: #38bdf8; border-color: rgba(56, 189, 248, 0.25); justify-content: center; padding: 0.5rem;">
-            <i data-lucide="settings" style="width: 13px; height: 13px;"></i>
-            Configure Engine Backend URL
-          </button>
-        </div>
+        <button type="button" class="btn btn-secondary w-full auth-settings-link" onclick="openSettingsModal()">
+          <i data-lucide="settings" style="width: 14px; height: 14px;"></i>
+          Configure Engine Backend URL
+        </button>
 
         <!-- Encryption & Security Footnote -->
-        <div
-          style="margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); font-size: 0.72rem; color: #a7f3d0; line-height: 1.45;">
-          🔒 <b>Zero-Knowledge Security</b>: Only <code>rxxxxxxxh.fxxxxxe@gmail.com</code> and
-          <code>axxxxxx6@gmail.com</code> are permitted to execute trades or configure keys. All credentials are AES-256
-          encrypted at rest.
+        <div class="auth-footnote">
+          <i data-lucide="lock" style="width: 14px; height: 14px; flex-shrink: 0;"></i>
+          <span><b>Zero-Knowledge Security</b>: Only <code>rxxxxxxxh.fxxxxxe@gmail.com</code> and
+            <code>axxxxxx6@gmail.com</code> are permitted to execute trades or configure keys. All credentials are
+            AES-256 encrypted at rest.</span>
         </div>
       </div>
     </div>
@@ -278,7 +255,7 @@
 
 
   <!-- ============================================================
-       VIEW 3: PROTECTED DASHBOARD / HOME PAGE (Authenticated Only)
+       VIEW 3: PROTECTED DASHBOARD (Authenticated Only)
        ============================================================ -->
   <div id="view-dashboard" class="spa-view" style="display: none;">
     <!-- Top App Header -->
@@ -292,43 +269,32 @@
       </div>
 
       <div class="header-status-group">
-        <!-- Horizontally Scrollable Status Badges Tray on Mobile -->
         <div class="status-badges-scroller">
-          <!-- Telegram Listener Status -->
           <div class="status-badge" id="tg-status-badge">
             <span class="pulse-dot idle" id="tg-pulse"></span>
             <span id="tg-status-text">Telegram: Standby</span>
           </div>
-
-          <!-- AI Provider Status -->
           <div class="status-badge" id="ai-status-badge">
-            <i data-lucide="cpu" style="width: 14px; height: 14px; color: #60a5fa;"></i>
+            <i data-lucide="cpu" style="width: 14px; height: 14px; color: var(--info-text);"></i>
             <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
           </div>
-
-          <!-- XM MT5 Broker Status -->
           <div class="status-badge" id="xm-status-badge" onclick="openSettingsModal()"
             style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
             title="XM MT5 Demo Broker Execution Status (Click to configure)">
-            <i data-lucide="zap" style="width: 14px; height: 14px; color: #f59e0b;"></i>
+            <i data-lucide="zap" style="width: 14px; height: 14px; color: var(--warning-text);"></i>
             <span id="xm-status-text">XM MT5: Demo Active</span>
           </div>
-
-          <!-- WebSocket Real-time Status -->
           <div class="status-badge" id="ws-status-badge">
-            <i data-lucide="activity" style="width: 14px; height: 14px; color: #10b981;"></i>
+            <i data-lucide="activity" style="width: 14px; height: 14px; color: var(--success-text);"></i>
             <span id="ws-status-text">Live: Connecting...</span>
           </div>
-
-          <!-- User Multi-Tenant Profile Badge -->
           <div id="user-profile-badge" class="status-badge" style="display: flex; border-color: rgba(56, 189, 248, 0.4);"
             title="Active Trader Profile">
-            <i data-lucide="shield-check" style="width: 14px; height: 14px; color: #38bdf8;"></i>
+            <i data-lucide="shield-check" style="width: 14px; height: 14px; color: var(--info-text);"></i>
             <span id="user-display-name">Trader</span>
           </div>
         </div>
 
-        <!-- Actions -->
         <div class="header-actions">
           <button class="btn btn-secondary" onclick="openSettingsModal()" title="System Settings">
             <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
@@ -346,29 +312,26 @@
       </div>
     </header>
 
-    <!-- Top KPI Stats Banner -->
+    <!-- KPI Stats Banner -->
     <section class="stats-grid">
       <div class="stat-card total">
         <div class="stat-label">Total Messages Monitored</div>
         <div class="stat-value" id="kpi-total">0</div>
         <div class="stat-sub">From Telegram channel & simulator</div>
       </div>
-
       <div class="stat-card trades">
         <div class="stat-label">Valid Trade Signals</div>
-        <div class="stat-value" id="kpi-trades" style="color: #34d399;">0</div>
+        <div class="stat-value" id="kpi-trades" style="color: var(--success-text);">0</div>
         <div class="stat-sub" id="kpi-trades-sub">New signals & entry setups</div>
       </div>
-
       <div class="stat-card chatter">
         <div class="stat-label">Chatter Filtered Out</div>
-        <div class="stat-value" id="kpi-chatter" style="color: #c084fc;">0</div>
+        <div class="stat-value" id="kpi-chatter" style="color: var(--purple-text);">0</div>
         <div class="stat-sub" id="kpi-noise-rate">0% noise rejection</div>
       </div>
-
       <div class="stat-card latency">
         <div class="stat-label">Avg AI Latency</div>
-        <div class="stat-value" id="kpi-latency" style="color: #60a5fa;">0 ms</div>
+        <div class="stat-value" id="kpi-latency" style="color: var(--info-text);">0 ms</div>
         <div class="stat-sub" id="kpi-confidence">0% average confidence</div>
       </div>
     </section>
@@ -379,11 +342,11 @@
       <div class="panel-container">
         <div class="panel-header">
           <div class="panel-title">
-            <i data-lucide="radio" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+            <i data-lucide="radio" style="width: 18px; height: 18px; color: var(--primary);"></i>
             Live Signal Feed & Decision Stream
           </div>
           <div class="search-box">
-            <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-dim);"></i>
+            <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-muted);"></i>
             <input type="text" id="signal-search" placeholder="Search signals, coins..."
               oninput="handleSearch(this.value)">
           </div>
@@ -401,7 +364,6 @@
 
       <!-- Right Pane: Simulator / Trades Watchlist / Logs -->
       <div class="panel-container">
-        <!-- Tab Navigation -->
         <div class="tab-nav">
           <button class="tab-btn active" onclick="switchTab('simulator')" id="tab-btn-simulator">
             <i data-lucide="flask-conical" style="width: 15px; height: 15px;"></i>
@@ -414,8 +376,7 @@
           <button class="tab-btn" onclick="switchTab('positions')" id="tab-btn-positions">
             <i data-lucide="trending-up" style="width: 15px; height: 15px;"></i>
             Active MT5 Trades
-            <span class="badge" id="open-positions-badge"
-              style="display:none; margin-left:5px; background:#10b981; color:#042f2e; padding:1px 6px; border-radius:10px; font-size:10px; font-weight:700;">0</span>
+            <span class="badge" id="open-positions-badge" style="display:none; margin-left:4px;">0</span>
           </button>
           <button class="tab-btn" onclick="switchTab('terminal')" id="tab-btn-terminal">
             <i data-lucide="terminal" style="width: 15px; height: 15px;"></i>
@@ -426,30 +387,24 @@
         <!-- Tab 1: Signal Simulator -->
         <div class="tab-content" id="tab-simulator">
           <div class="simulator-presets-bar">
-            <div
-              style="font-size: 0.72rem; text-transform: uppercase; color: #f59e0b; font-weight: 700; margin-bottom: 0.4rem; display: flex; align-items: center; gap: 0.35rem;">
+            <div class="presets-label">
               <i data-lucide="sparkles" style="width: 13px; height: 13px;"></i>
               Simulate Telegram Channel Signals (AI Classifies with 10-Message History)
             </div>
             <div class="presets-row">
-              <button class="preset-btn" onclick="injectPreset('PENDING')"
-                style="background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.4); color: #fbbf24;">
+              <button class="preset-btn preset-pending" onclick="injectPreset('PENDING')">
                 🟡 Pending Signal (Wait for Tap)
               </button>
-              <button class="preset-btn" onclick="injectPreset('ACTIVE_MARKET')"
-                style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #34d399;">
+              <button class="preset-btn preset-active" onclick="injectPreset('ACTIVE_MARKET')">
                 🟢 Market Trade (Active Now)
               </button>
-              <button class="preset-btn" onclick="injectPreset('ACTIVATE_CONFIRM')"
-                style="background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); color: #60a5fa;">
+              <button class="preset-btn preset-confirm" onclick="injectPreset('ACTIVATE_CONFIRM')">
                 ⚡ Owner: "ACTIVE NOW, ENTER CMP!"
               </button>
-              <button class="preset-btn" onclick="injectPreset('CANCEL')"
-                style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
+              <button class="preset-btn preset-cancel" onclick="injectPreset('CANCEL')">
                 🛑 Owner: "Cancel Setup / Do Not Enter"
               </button>
-              <button class="preset-btn" onclick="injectPreset('CHATTER')"
-                style="background: rgba(100, 116, 139, 0.2); border-color: rgba(100, 116, 139, 0.4); color: #cbd5e1;">
+              <button class="preset-btn preset-chatter" onclick="injectPreset('CHATTER')">
                 💬 Channel Chatter
               </button>
             </div>
@@ -457,19 +412,19 @@
 
           <form id="simulator-form" onsubmit="submitSimulation(event)">
             <div class="form-group">
-              <label class="form-label">Simulated Sender Name</label>
+              <label class="form-label" for="sim-sender">Simulated Sender Name</label>
               <input type="text" id="sim-sender" class="form-control" value="Channel Owner"
                 placeholder="e.g. VIP Admin, Owner">
             </div>
 
             <div class="form-group">
-              <label class="form-label">Channel Name</label>
+              <label class="form-label" for="sim-channel">Channel Name</label>
               <input type="text" id="sim-channel" class="form-control" value="VIP Forex & Crypto Signals"
                 placeholder="e.g. ALPHA PREMIUM Signals">
             </div>
 
             <div class="form-group">
-              <label class="form-label">Message Content (Text, Slang, Pips, SL/TP, or Casual Talk)</label>
+              <label class="form-label" for="sim-text">Message Content (Text, Slang, Pips, SL/TP, or Casual Talk)</label>
               <textarea id="sim-text" class="form-control" rows="4"
                 placeholder="E.g., BUY GOLD 2640-2642 SL 2634 TP1 2648... or '1:1 DONE book partial' or 'RISK FREE KRDO'"></textarea>
             </div>
@@ -477,31 +432,22 @@
             <div class="form-group">
               <label class="form-label">Attach Chart Screenshot / Image (Optional for Vision AI)</label>
               <div class="drop-zone" id="drop-zone" onclick="document.getElementById('sim-file').click()">
-                <i data-lucide="image-plus" style="width: 28px; height: 28px; color: var(--text-dim);"></i>
-                <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-muted); margin-top: 0.25rem;">
-                  Click to upload or drag screenshot here
-                </div>
-                <div style="font-size: 0.7rem; color: var(--text-dim);">
-                  Supports PNG, JPG, WEBP (MT4/5 screenshots, TradingView charts)
-                </div>
+                <i data-lucide="image-plus" style="width: 28px; height: 28px; color: var(--text-muted);"></i>
+                <div class="drop-zone-title">Click to upload or drag screenshot here</div>
+                <div class="drop-zone-hint">Supports PNG, JPG, WEBP (MT4/5 screenshots, TradingView charts)</div>
                 <input type="file" id="sim-file" accept="image/*" style="display: none;"
                   onchange="handleFileSelect(event)">
               </div>
-              <div id="file-preview-area"
-                style="display: none; align-items: center; justify-content: space-between; margin-top: 0.5rem; background: var(--bg-card); padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color);">
-                <div style="display: flex; align-items: center; gap: 0.5rem;">
-                  <img id="preview-thumbnail"
-                    style="width: 36px; height: 36px; border-radius: 4px; object-fit: cover; border: 1px solid var(--border-color);">
-                  <span id="preview-filename"
-                    style="font-size: 0.78rem; font-weight: 500; color: var(--text-main);"></span>
+              <div id="file-preview-area" class="file-preview-area" style="display: none;">
+                <div class="file-preview-info">
+                  <img id="preview-thumbnail" class="file-preview-thumb" alt="Selected screenshot preview">
+                  <span id="preview-filename" class="file-preview-name"></span>
                 </div>
-                <button type="button" class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;"
-                  onclick="clearSelectedFile()">Remove</button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="clearSelectedFile()">Remove</button>
               </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" id="btn-sim-submit"
-              style="width: 100%; justify-content: center; padding: 0.75rem;">
+            <button type="submit" class="btn btn-primary btn-block" id="btn-sim-submit">
               <i data-lucide="send" style="width: 16px; height: 16px;"></i>
               Process &amp; Filter with AI
             </button>
@@ -510,60 +456,54 @@
 
         <!-- Tab 2: Trade Watchlist & Outcomes -->
         <div class="tab-content" id="tab-watchlist" style="display: none;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-            <div style="font-size: 0.8rem; color: var(--text-dim);">Active & Closed Managed Trades</div>
-            <button class="btn btn-secondary" onclick="loadTrades()"
-              style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+          <div class="tab-toolbar">
+            <div class="tab-toolbar-text">Active & Closed Managed Trades</div>
+            <button class="btn btn-secondary btn-sm" onclick="loadTrades()">
               <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
               Refresh
             </button>
           </div>
-          <div id="watchlist-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div id="watchlist-container" class="watchlist-container">
             <!-- Populated via loadTrades() -->
           </div>
         </div>
 
-        <!-- Tab 4: Active Running Trades in XM MT5 -->
-        <div class="tab-content" id="tab-positions"
-          style="display: none; height: 100%; overflow-y: auto; padding: 0.75rem;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <!-- Tab 3: Active Running Trades in XM MT5 -->
+        <div class="tab-content tab-content-positions" id="tab-positions" style="display: none;">
+          <div class="tab-toolbar">
             <div>
-              <div
-                style="font-size: 0.85rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 0.4rem;">
-                <i data-lucide="activity" style="width: 14px; height: 14px; color: #10b981;"></i>
+              <div class="tab-toolbar-title">
+                <i data-lucide="activity" style="width: 14px; height: 14px; color: var(--success-text);"></i>
                 Live Open Positions in XM MT5
               </div>
-              <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 2px;">
-                Strict Lot Sizing: 0.02 Gold / 0.04 Bitcoin / 0.01 Others | Hands-Off Execution
-              </div>
+              <div class="tab-toolbar-sub">Strict Lot Sizing: 0.02 Gold / 0.04 Bitcoin / 0.01 Others | Hands-Off
+                Execution</div>
             </div>
-            <button class="btn btn-secondary" onclick="loadXMPositions()"
-              style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+            <button class="btn btn-secondary btn-sm" onclick="loadXMPositions()">
               <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
               Refresh
             </button>
           </div>
 
-          <!-- Account Meta Bar -->
           <div id="xm-positions-meta" class="xm-positions-meta">
-            <div><span style="color:var(--text-dim);">Server:</span> <strong id="xm-meta-server">XMGlobal-MT5</strong>
-            </div>
-            <div><span style="color:var(--text-dim);">Account:</span> <strong id="xm-meta-account">#Demo</strong></div>
-            <div><span style="color:var(--text-dim);">Open Positions:</span> <strong id="xm-meta-count"
-                style="color:#10b981;">0</strong></div>
-            <div style="margin-left: auto;"><span style="color:var(--text-dim);">Floating PnL:</span> <strong
-                id="xm-meta-pnl" style="color:#10b981;">$0.00</strong></div>
+            <div><span class="meta-label">Server:</span> <strong id="xm-meta-server">XMGlobal-MT5</strong></div>
+            <div><span class="meta-label">Account:</span> <strong id="xm-meta-account">#Demo</strong></div>
+            <div><span class="meta-label">Open Positions:</span> <strong id="xm-meta-count"
+                style="color: var(--success-text);">0</strong></div>
+            <div><span class="meta-label">Floating PnL:</span> <strong id="xm-meta-pnl"
+                style="color: var(--success-text);">$0.00</strong></div>
           </div>
 
-          <!-- Open Positions List Container -->
           <div id="positions-container">
-            <div style="text-align: center; color: var(--text-dim); padding: 2rem;">No active running positions on XM
-              MT5.</div>
+            <div class="empty-state">
+              <i data-lucide="shield-check" style="width: 32px; height: 32px; color: var(--success-text);"></i>
+              <div class="empty-state-title">No Active Running Trades in XM MT5</div>
+            </div>
           </div>
         </div>
 
-        <!-- Tab 3: Live Terminal -->
-        <div class="tab-content" id="tab-terminal" style="display: none; height: 100%; padding: 0.75rem;">
+        <!-- Tab 4: Live Terminal -->
+        <div class="tab-content tab-content-terminal" id="tab-terminal" style="display: none;">
           <div class="terminal-window" id="terminal-logs">
             <div class="log-entry">
               <span class="log-time">[System]</span>
@@ -578,139 +518,123 @@
 
 
   <!-- ============================================================
-       SYSTEM SETTINGS & INTEGRATIONS MODAL (Session-wise & Encrypted)
+       SYSTEM SETTINGS & INTEGRATIONS MODAL
        ============================================================ -->
   <div class="modal-overlay" id="settings-modal" style="display: none;">
-    <div class="modal-content" style="max-width: 650px;">
+    <div class="modal-content modal-content-lg">
       <div class="modal-header">
-        <div style="font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
-          <i data-lucide="sliders" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+        <div class="modal-title">
+          <i data-lucide="sliders" style="width: 18px; height: 18px; color: var(--primary);"></i>
           System Settings &amp; Integrations
         </div>
-        <button class="close-btn" onclick="closeSettingsModal()">&times;</button>
+        <button class="close-btn" onclick="closeSettingsModal()" aria-label="Close">&times;</button>
       </div>
 
       <div class="modal-body">
-        <!-- AI Engine Section -->
-        <div style="margin-bottom: 1.5rem;">
-          <h3
-            style="font-size: 0.85rem; text-transform: uppercase; color: #60a5fa; margin-bottom: 0.75rem; font-weight: 700;">
+        <!-- Section 1: AI Provider -->
+        <section class="settings-section">
+          <h3 class="settings-section-title settings-section-blue">
             1. Free AI Provider Configuration
           </h3>
 
           <div class="form-group">
-            <label class="form-label">Active AI Provider</label>
+            <label class="form-label" for="setting-provider">Active AI Provider</label>
             <select id="setting-provider" class="form-control" onchange="toggleProviderFields()">
               <option value="groq">Groq API (Recommended — 100% Free Tier, Ultra Fast)</option>
               <option value="gemini">Google Gemini API (100% Free Tier, Multimodal)</option>
             </select>
           </div>
 
-          <!-- Groq Config -->
           <div id="groq-fields">
             <div class="form-group">
-              <label class="form-label">
+              <label class="form-label" for="setting-groq-key">
                 Groq API Key
-                <a href="https://console.groq.com/keys" target="_blank"
-                  style="color: #60a5fa; font-size: 0.7rem; float: right; text-decoration: underline;">Get Free Groq Key
-                  &rarr;</a>
+                <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="settings-link">Get Free
+                  Groq Key &rarr;</a>
               </label>
               <input type="password" id="setting-groq-key" class="form-control" placeholder="gsk_...">
-              <small style="color: var(--text-dim); font-size: 0.7rem;">Free tier with high limits. Stored encrypted at
-                rest.</small>
+              <small class="settings-hint">Free tier with high limits. Stored encrypted at rest.</small>
             </div>
 
             <div class="form-group">
-              <label class="form-label">Groq Text Model</label>
+              <label class="form-label" for="setting-groq-model">Groq Text Model</label>
               <input type="text" id="setting-groq-model" class="form-control" value="llama-3.3-70b-versatile">
             </div>
 
             <div class="form-group">
-              <label class="form-label">Groq Vision Model (for Chart Screenshots)</label>
+              <label class="form-label" for="setting-groq-vision-model">Groq Vision Model (for Chart Screenshots)</label>
               <input type="text" id="setting-groq-vision-model" class="form-control"
                 value="llama-3.2-11b-vision-preview">
             </div>
           </div>
 
-          <!-- Gemini Config -->
           <div id="gemini-fields" style="display: none;">
             <div class="form-group">
-              <label class="form-label">
+              <label class="form-label" for="setting-gemini-key">
                 Google Gemini API Key
-                <a href="https://aistudio.google.com/app/apikey" target="_blank"
-                  style="color: #60a5fa; font-size: 0.7rem; float: right; text-decoration: underline;">Get Free Gemini
-                  Key &rarr;</a>
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener"
+                  class="settings-link">Get Free Gemini Key &rarr;</a>
               </label>
               <input type="password" id="setting-gemini-key" class="form-control" placeholder="AIzaSy...">
             </div>
 
             <div class="form-group">
-              <label class="form-label">Gemini Model</label>
+              <label class="form-label" for="setting-gemini-model">Gemini Model</label>
               <input type="text" id="setting-gemini-model" class="form-control" value="gemini-1.5-flash">
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Telegram Listener Section with Multi-Channel Dialog Harvester -->
-        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
-          <h3
-            style="font-size: 0.85rem; text-transform: uppercase; color: #34d399; margin-bottom: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between;">
+        <!-- Section 2: Telegram -->
+        <section class="settings-section">
+          <h3 class="settings-section-title settings-section-title-row">
             <span>2. Telegram Account &amp; Multi-Channel Listener</span>
-            <span
-              style="font-size: 0.65rem; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); padding: 0.15rem 0.45rem; border-radius: 4px;">
-              Multi-Channel Harvester
-            </span>
+            <span class="settings-chip settings-chip-green">Multi-Channel Harvester</span>
           </h3>
-          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          <p class="settings-desc">
             Enter your Telegram API credentials from <a href="https://my.telegram.org/apps" target="_blank"
-              style="color: #60a5fa;">my.telegram.org</a>. Then click below to automatically load and select from all
-            your joined channels and groups.
+              rel="noopener">my.telegram.org</a>. Then click below to automatically load and select from all your
+            joined channels and groups.
           </p>
 
           <div class="form-row-2col">
-            <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label">Telegram API ID</label>
+            <div class="form-group">
+              <label class="form-label" for="setting-tg-api-id">Telegram API ID</label>
               <input type="text" id="setting-tg-api-id" class="form-control" placeholder="e.g. 21434478">
             </div>
-            <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label">Telegram Phone</label>
+            <div class="form-group">
+              <label class="form-label" for="setting-tg-phone">Telegram Phone</label>
               <input type="text" id="setting-tg-phone" class="form-control" placeholder="e.g. +1234567890">
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">Telegram API Hash (AES-256 Encrypted)</label>
+            <label class="form-label" for="setting-tg-api-hash">Telegram API Hash (AES-256 Encrypted)</label>
             <input type="password" id="setting-tg-api-hash" class="form-control"
               placeholder="••••••••••••••••••••••••••••••••">
           </div>
 
-          <!-- Dialogs Harvester -->
-          <div
-            style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 0.85rem; margin-bottom: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-size: 0.78rem; font-weight: 700; color: #38bdf8;">
-                Joined Channels &amp; Groups
-              </span>
+          <div class="dialogs-picker-wrap">
+            <div class="dialogs-picker-top">
+              <span class="dialogs-picker-title">Joined Channels &amp; Groups</span>
               <button type="button" class="btn btn-secondary btn-sm" onclick="fetchTelegramDialogs()"
-                id="btn-fetch-dialogs" style="font-size: 0.72rem; padding: 0.25rem 0.6rem;">
+                id="btn-fetch-dialogs">
                 <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
                 Fetch My Groups &amp; Channels
               </button>
             </div>
 
-            <!-- Dynamic Channels Container -->
             <div id="tg-dialogs-container" class="dialogs-picker-container" style="display: none;">
               <!-- Populated dynamically via fetchTelegramDialogs() -->
             </div>
-            <div id="tg-dialogs-empty"
-              style="font-size: 0.72rem; color: var(--text-dim); text-align: center; padding: 0.75rem;">
+            <div id="tg-dialogs-empty" class="dialogs-empty">
               Click "Fetch My Groups &amp; Channels" to load your joined signal chats.
             </div>
           </div>
 
           <div class="modal-btn-row">
             <button class="btn btn-primary" onclick="startMultiClientListener()" id="btn-start-multi"
-              style="flex: 1; justify-content: center;">
+              style="flex: 1;">
               <i data-lucide="radio" style="width: 14px; height: 14px;"></i>
               Start Multi-Channel Listener
             </button>
@@ -720,32 +644,25 @@
             </button>
           </div>
 
-          <!-- Optional Bot Token fallback -->
-          <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px dashed rgba(255, 255, 255, 0.08);">
-            <label class="form-label" style="font-size: 0.72rem;">Bot Token (Optional fallback for single test
+          <div class="settings-subsection">
+            <label class="form-label" for="setting-bot-token">Bot Token (Optional fallback for single test
               channel)</label>
-            <input type="password" id="setting-bot-token" class="form-control" placeholder="123456:ABC-DEF..."
-              style="font-size: 0.75rem;">
+            <input type="password" id="setting-bot-token" class="form-control" placeholder="123456:ABC-DEF...">
           </div>
-        </div>
+        </section>
 
-        <!-- Section 3: XM MT5 Broker & Automated Trading -->
-        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-          <h3
-            style="font-size: 0.85rem; text-transform: uppercase; color: #f59e0b; margin-bottom: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between;">
+        <!-- Section 3: XM MT5 Broker -->
+        <section class="settings-section">
+          <h3 class="settings-section-title settings-section-title-row">
             <span>3. XM MT5 Broker &amp; Automated Execution</span>
-            <span
-              style="font-size: 0.65rem; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.4); padding: 0.15rem 0.45rem; border-radius: 4px; color: #fbbf24;">
-              Demo &amp; Live Supported
-            </span>
+            <span class="settings-chip settings-chip-amber">Demo &amp; Live Supported</span>
           </h3>
 
-          <div class="form-group"
-            style="display: flex; align-items: center; justify-content: space-between; background: rgba(245, 158, 11, 0.08); padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.2);">
+          <div class="form-group xm-auto-row">
             <div>
-              <div style="font-weight: 700; font-size: 0.82rem; color: #fbbf24;">Autonomous XM MT5 Order Execution</div>
-              <div style="font-size: 0.7rem; color: var(--text-dim);">When ON, approved trades automatically fire in MT5
-                with strict SL and 1:1 scale-out trailing.</div>
+              <div class="xm-auto-title">Autonomous XM MT5 Order Execution</div>
+              <div class="xm-auto-desc">When ON, approved trades automatically fire in MT5 with strict SL and 1:1
+                scale-out trailing.</div>
             </div>
             <label class="toggle-switch">
               <input type="checkbox" id="setting-xm-auto" checked>
@@ -755,44 +672,38 @@
 
           <div class="form-row-2col">
             <div class="form-group">
-              <label class="form-label">XM MT5 Login (Account ID)</label>
+              <label class="form-label" for="setting-xm-login">XM MT5 Login (Account ID)</label>
               <input type="number" id="setting-xm-login" class="form-control" placeholder="e.g. 346554725">
             </div>
             <div class="form-group">
-              <label class="form-label">XM Server Name</label>
+              <label class="form-label" for="setting-xm-server">XM Server Name</label>
               <input type="text" id="setting-xm-server" class="form-control" placeholder="e.g. XMGlobal-MT5 10">
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">
+            <label class="form-label" for="setting-xm-password">
               XM MT5 Password
-              <span style="font-size: 0.7rem; color: #34d399; float: right;">🔒 Stored AES-256 Encrypted</span>
+              <span class="settings-secure-note">🔒 Stored AES-256 Encrypted</span>
             </label>
             <input type="password" id="setting-xm-password" class="form-control" placeholder="••••••••••••">
           </div>
-        </div>
+        </section>
 
-        <!-- Section 4: 24/7 Hosting & Backend Bridge -->
-        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-          <h3
-            style="font-size: 0.85rem; text-transform: uppercase; color: #38bdf8; margin-bottom: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between;">
+        <!-- Section 4: Hosting & Backend Bridge -->
+        <section class="settings-section">
+          <h3 class="settings-section-title settings-section-title-row">
             <span>4. 24/7 Free Hosting &amp; Backend Tunnel</span>
-            <span
-              style="font-size: 0.65rem; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); padding: 0.15rem 0.45rem; border-radius: 4px; color: #38bdf8;">
-              Vercel Bridge
-            </span>
+            <span class="settings-chip settings-chip-blue">Vercel Bridge</span>
           </h3>
           <div class="form-group">
-            <label class="form-label">Backend Tunnel URL (Cloudflare Tunnel / Ngrok)</label>
+            <label class="form-label" for="setting-api-url">Backend Tunnel URL (Cloudflare Tunnel / Ngrok)</label>
             <input type="text" id="setting-api-url" class="form-control"
               placeholder="https://your-tunnel.trycloudflare.com">
-            <div style="font-size: 0.68rem; color: var(--text-dim); margin-top: 0.35rem;">
-              When hosting the frontend on Vercel, enter your free Cloudflare Tunnel URL here. Automatically persists
-              across refreshes.
-            </div>
+            <div class="settings-hint">When hosting the frontend on Vercel, enter your free Cloudflare Tunnel URL here.
+              Automatically persists across refreshes.</div>
           </div>
-        </div>
+        </section>
       </div>
 
       <div class="modal-footer">
@@ -804,13 +715,13 @@
 
   <!-- JSON Raw Inspection Modal -->
   <div class="modal-overlay" id="json-modal" style="display: none;">
-    <div class="modal-content" style="max-width: 680px;">
+    <div class="modal-content modal-content-lg">
       <div class="modal-header">
-        <div style="font-weight: 700; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-          <i data-lucide="code" style="width: 18px; height: 18px; color: #38bdf8;"></i>
+        <div class="modal-title">
+          <i data-lucide="code" style="width: 18px; height: 18px; color: var(--info-text);"></i>
           Raw AI Intent &amp; Extraction Payload
         </div>
-        <button class="close-btn" onclick="closeJsonModal()">&times;</button>
+        <button class="close-btn" onclick="closeJsonModal()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <pre class="code-json" id="json-viewer"></pre>
@@ -821,7 +732,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=24"></script>
+  <script src="./app.js?v=25"></script>
 </body>
 
 </html>

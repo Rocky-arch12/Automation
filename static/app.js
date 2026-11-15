@@ -497,8 +497,8 @@ function renderFeed(messages) {
 
   if (!messages || messages.length === 0) {
     container.innerHTML = `
-      <div style="text-align: center; color: var(--text-dim); padding: 3rem 1rem;">
-        <i data-lucide="inbox" style="width: 36px; height: 36px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+      <div class="empty-state">
+        <i data-lucide="inbox" style="width: 36px; height: 36px; opacity: 0.5;"></i>
         <p>No messages match current filter (${currentFilter}).</p>
       </div>
     `;
@@ -562,11 +562,11 @@ function createSignalCardHtml(msg) {
   return `
     <div class="${cardClass}" id="msg-card-${msg.message_id}">
       <div class="signal-card-header">
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="signal-card-meta">
           <span class="sender-tag">${escapeHtml(msg.sender || "Channel Owner")}</span>
-          <span style="font-size: 0.7rem; color: var(--text-dim);">in ${escapeHtml(msg.channel_title || "Channel")}</span>
+          <span class="signal-card-meta-sub">in ${escapeHtml(msg.channel_title || "Channel")}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="signal-card-meta-right">
           <span class="source-pill">${msg.source || "telegram"}</span>
           <span>${timeFormatted}</span>
         </div>
@@ -581,14 +581,14 @@ function createSignalCardHtml(msg) {
       if (p.includes('uploads/')) p = p.substring(p.indexOf('uploads/'));
       else if (p.includes('sample_signals/')) p = p.substring(p.indexOf('sample_signals/'));
       if (!p.startsWith('/')) p = '/' + p;
-      return `<div style="margin-top: 0.6rem;"><img src="${p}" class="raw-image-thumb" onclick="window.open(this.src)" title="Click to view full image" onerror="this.parentElement.style.display='none'"></div>`;
+      return `<div class="img-wrap"><img src="${p}" class="raw-image-thumb" onclick="window.open(this.src)" title="Click to view full image" onerror="this.parentElement.style.display='none'"></div>`;
     })()}
       </div>
 
       <!-- AI Interpretation Box -->
       <div class="ai-box">
         ${msg.trade_id ? `
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.65rem; padding: 0.35rem 0.65rem; background: rgba(15, 23, 42, 0.7); border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.25);">
+          <div class="trade-link-row">
             <span class="trade-id-pill" onclick="switchRightTab('watchlist'); filterToTrade('${msg.trade_id}')" title="Click to view full lifecycle in Trade Watchlist">
               <i data-lucide="tag" style="width: 11px; height: 11px;"></i> #${msg.trade_id}
             </span>
@@ -601,14 +601,14 @@ function createSignalCardHtml(msg) {
         ` : ''}
 
         <div class="ai-box-header">
-          <div style="display: flex; align-items: center; gap: 0.6rem;">
+          <div class="ai-box-head-row">
             <span class="${badgeClass}">
               <i data-lucide="${badgeIcon}" style="width: 13px; height: 13px;"></i>
               ${intent === "CHATTER" ? "CHATTER / FILTERED" : `${action} ${msg.symbol || ''}`}
             </span>
             ${msg.symbol && !isChatter ? `<span class="symbol-badge">${msg.symbol}</span>` : ''}
           </div>
-          <div style="font-size: 0.75rem; font-weight: 700; color: ${confidence > 80 ? '#34d399' : '#fbbf24'};">
+          <div class="confidence-label" style="color: ${confidence > 80 ? 'var(--success-text)' : 'var(--warning-text)'};">
             ${confidence}% Confidence
           </div>
         </div>
@@ -635,7 +635,7 @@ function createSignalCardHtml(msg) {
         ` : ''}
 
         <div class="reasoning-text">
-          <span style="font-weight: 600; color: #94a3b8;">AI Intent:</span> ${escapeHtml(msg.reasoning || "Analyzed intent.")}
+          <span class="ai-intent-label">AI Intent:</span> ${escapeHtml(msg.reasoning || "Analyzed intent.")}
         </div>
 
         <div class="meta-footer">
@@ -643,7 +643,7 @@ function createSignalCardHtml(msg) {
             <i data-lucide="cpu" style="width: 12px; height: 12px; display: inline-block; vertical-align: middle;"></i>
             ${escapeHtml(msg.model_used || "Smart Engine")} &bull; ${msg.processing_time_ms || 12}ms
           </div>
-          <button class="btn btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.68rem;" onclick="inspectJson('${safeJsonData}')">
+          <button class="btn btn-secondary btn-xs" onclick="inspectJson('${safeJsonData}')">
             <i data-lucide="code" style="width: 12px; height: 12px;"></i> Inspect Raw JSON
           </button>
         </div>
@@ -960,10 +960,10 @@ function renderTrades(trades) {
 
   if (!trades || trades.length === 0) {
     container.innerHTML = `
-      <div style="text-align: center; color: var(--text-dim); padding: 2.5rem 1rem;">
-        <i data-lucide="shield-check" style="width: 36px; height: 36px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+      <div class="empty-state">
+        <i data-lucide="shield-check" style="width: 36px; height: 36px; opacity: 0.5;"></i>
         <p>No trades matching filter (${currentTradeFilter}).</p>
-        <p style="font-size: 0.72rem; margin-top: 0.3rem;">Simulate a trade setup or receive a Telegram broadcast to track lifecycle states.</p>
+        <p class="empty-state-sub">Simulate a trade setup or receive a Telegram broadcast to track lifecycle states.</p>
       </div>
     `;
     initIcons();
@@ -983,22 +983,22 @@ function renderTrades(trades) {
       <div class="trade-tracker-card" id="trade-card-${t.trade_id}">
         <div class="trade-card-top">
           <div>
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div class="trade-head-row">
               <span class="trade-id-pill" title="Unique Trade Identifier">
                 <i data-lucide="tag" style="width: 11px; height: 11px;"></i> #${t.trade_id}
               </span>
               <span class="trade-card-symbol">
-                <span style="color: ${isBuy ? '#34d399' : '#f87171'};">${t.action || 'BUY'}</span>
+                <span style="color: ${isBuy ? 'var(--success-text)' : 'var(--danger-text)'};">${t.action || 'BUY'}</span>
                 <span>${t.symbol || 'XAUUSD'}</span>
               </span>
               <span class="source-pill">${t.order_type || 'MARKET'}</span>
             </div>
-            <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.35rem;">
+            <div class="trade-start-meta">
               Started: ${t.created_at ? new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today'}
               ${t.updated_at && t.updated_at !== t.created_at ? `&bull; Updated: ${new Date(t.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
             </div>
           </div>
-          <div style="text-align: right;">
+          <div class="trade-outcome-wrap">
             <span class="outcome-badge ${badgeCls}">
               ${escapeHtml(t.outcome || t.status)}
             </span>
@@ -1006,7 +1006,7 @@ function renderTrades(trades) {
         </div>
 
         <!-- Prices Row -->
-        <div class="params-grid" style="margin-bottom: 0.5rem;">
+        <div class="params-grid params-grid-tight">
           <div class="param-item">
             <div class="param-title">Entry</div>
             <div class="param-value ${isBuy ? 'green' : 'red'}">${t.entry_price || 'CMP'}</div>
@@ -1021,33 +1021,33 @@ function renderTrades(trades) {
           </div>
           <div class="param-item">
             <div class="param-title">Risk:Reward</div>
-            <div class="param-value" style="color: #60a5fa;">${t.risk_reward || '1:2+'}</div>
+            <div class="param-value blue">${t.risk_reward || '1:2+'}</div>
           </div>
         </div>
 
         ${t.xm_ticket ? `
-          <div class="xm-execution-receipt" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.75rem;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;">
-              <span style="font-weight: 700; color: #34d399; display: flex; align-items: center; gap: 0.35rem;">
+          <div class="xm-execution-receipt">
+            <div class="xm-receipt-top">
+              <span class="xm-receipt-title">
                 <i data-lucide="check-circle-2" style="width: 14px; height: 14px;"></i>
                 XM MT5 Order Executed
               </span>
-              <span style="font-size: 0.7rem; color: #a7f3d0; background: rgba(16, 185, 129, 0.2); padding: 1px 7px; border-radius: 4px; font-weight: 700;">
+              <span class="xm-receipt-ticket">
                 Ticket #${t.xm_ticket}
               </span>
             </div>
-            <div style="display: flex; gap: 0.8rem; font-size: 0.72rem; color: var(--text-muted);">
-              <div>Lots: <strong style="color:var(--text-main);">${t.xm_lots || (t.symbol && t.symbol.includes('BTC') ? '0.04' : (t.symbol && (t.symbol.includes('XAU') || t.symbol.includes('GOLD')) ? '0.02' : '0.01'))}</strong></div>
-              <div>Fill Price: <strong style="color:var(--text-main);">${t.xm_execution_price || t.entry_price || 'CMP'}</strong></div>
-              <div>SL: <strong style="color:#f87171;">${t.sl || 'Open'}</strong></div>
-              <div>TP: <strong style="color:#34d399;">${tpDisplay}</strong></div>
+            <div class="xm-receipt-stats">
+              <div>Lots: <strong class="xm-stat-strong">${t.xm_lots || (t.symbol && t.symbol.includes('BTC') ? '0.04' : (t.symbol && (t.symbol.includes('XAU') || t.symbol.includes('GOLD')) ? '0.02' : '0.01'))}</strong></div>
+              <div>Fill Price: <strong class="xm-stat-strong">${t.xm_execution_price || t.entry_price || 'CMP'}</strong></div>
+              <div>SL: <strong style="color:var(--danger-text);">${t.sl || 'Open'}</strong></div>
+              <div>TP: <strong style="color:var(--success-text);">${tpDisplay}</strong></div>
             </div>
-            <div style="font-size: 0.68rem; color: #34d399; margin-top: 0.3rem; font-weight: 600;">
+            <div class="xm-receipt-policy">
               🛡️ XM Policy: Running Hands-Off until TP or SL is reached.
             </div>
           </div>
         ` : (t.pnl_notes ? `
-          <div style="font-size: 0.72rem; padding: 0.35rem 0.6rem; border-radius: 5px; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; ${t.pnl_notes.includes('SAFETY SHIELD') || t.pnl_notes.includes('REJECTED') ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;' : 'background: rgba(0,0,0,0.25); color: var(--text-muted);'}">
+          <div class="pnl-note ${t.pnl_notes.includes('SAFETY SHIELD') || t.pnl_notes.includes('REJECTED') ? 'pnl-note-shield' : 'pnl-note-info'}">
             <i data-lucide="${t.pnl_notes.includes('SAFETY SHIELD') || t.pnl_notes.includes('REJECTED') ? 'shield-alert' : 'info'}" style="width: 13px; height: 13px; flex-shrink: 0;"></i>
             <span>${escapeHtml(t.pnl_notes)}</span>
           </div>
@@ -1055,22 +1055,22 @@ function renderTrades(trades) {
 
         <!-- Actions & Timeline Row -->
         <div class="trade-card-actions">
-          <button class="btn btn-sm btn-secondary" onclick="toggleTimeline('${t.trade_id}')" style="padding: 0.25rem 0.6rem; font-size: 0.7rem;">
+          <button class="btn btn-secondary btn-xs" onclick="toggleTimeline('${t.trade_id}')">
             <i data-lucide="history" style="width: 12px; height: 12px;"></i>
             Timeline (${t.event_count || 1})
           </button>
 
-          <div style="margin-left: auto; display: flex; align-items: center; gap: 0.35rem;">
+          <div class="trade-action-spacer">
             ${t.status === 'PENDING' ? `
-              <button class="btn btn-sm" onclick="updateTradeStatusManual('${t.trade_id}', 'CANCELLED')" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.7rem; padding: 0.2rem 0.5rem;">
+              <button class="btn btn-danger btn-xs" onclick="updateTradeStatusManual('${t.trade_id}', 'CANCELLED')">
                 <i data-lucide="x" style="width: 11px; height: 11px;"></i> Cancel Setup
               </button>
             ` : t.status === 'EXECUTED' ? `
-              <span style="font-size: 0.72rem; color: #10b981; font-weight: 700; display: flex; align-items: center; gap: 0.25rem;">
+              <span class="trade-action-state">
                 <i data-lucide="lock" style="width: 11px; height: 11px;"></i> XM Hands-Off
               </span>
             ` : `
-              <span style="font-size: 0.72rem; color: var(--text-dim);">
+              <span class="trade-action-dim">
                 ${escapeHtml(t.outcome || t.status)}
               </span>
             `}
@@ -1079,7 +1079,7 @@ function renderTrades(trades) {
 
         <!-- Hidden Timeline Container -->
         <div id="timeline-${t.trade_id}" class="trade-timeline-container" style="display: none;">
-          <div style="text-align: center; color: var(--text-dim); padding: 0.5rem;">Loading trade lifecycle audit...</div>
+          <div class="timeline-loading">Loading trade lifecycle audit...</div>
         </div>
       </div>
     `;
@@ -1104,31 +1104,31 @@ async function toggleTimeline(tradeId) {
     const events = data.events || [];
 
     if (events.length === 0) {
-      container.innerHTML = `<div style="color: var(--text-dim);">No logged events yet.</div>`;
+      container.innerHTML = `<div class="timeline-no-events">No logged events yet.</div>`;
       return;
     }
 
     container.innerHTML = `
-      <div style="font-weight: 700; color: #94a3b8; margin-bottom: 0.5rem; font-size: 0.72rem;">
+      <div class="timeline-audit-title">
         Lifecycle Audit Trail (${events.length} events)
       </div>
       ${events.map(ev => `
         <div class="trade-timeline-step">
           <div class="timeline-dot"></div>
           <div>
-            <div style="display: flex; gap: 0.4rem; align-items: center;">
-              <span class="outcome-badge ${getOutcomeBadgeClass(ev.new_status)}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem;">
+            <div class="timeline-step-meta">
+              <span class="outcome-badge outcome-badge-sm ${getOutcomeBadgeClass(ev.new_status)}">
                 ${escapeHtml(ev.new_status)}
               </span>
-              <span style="color: var(--text-dim); font-size: 0.65rem;">
+              <span class="timeline-step-time">
                 ${ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : ''}
               </span>
             </div>
-            <div style="margin-top: 0.2rem; color: #e2e8f0; font-size: 0.72rem;">
+            <div class="timeline-step-note">
               ${escapeHtml(ev.notes || '')}
             </div>
             ${ev.text ? `
-              <div style="font-style: italic; color: var(--text-muted); font-size: 0.68rem; margin-top: 0.15rem;">
+              <div class="timeline-step-quote">
                 Telegram: "${escapeHtml(ev.text)}"
               </div>
             ` : ''}
@@ -1137,7 +1137,7 @@ async function toggleTimeline(tradeId) {
       `).join("")}
     `;
   } catch (err) {
-    container.innerHTML = `<div style="color: #ef4444;">Failed to load events: ${escapeHtml(err.message)}</div>`;
+    container.innerHTML = `<div class="timeline-error">Failed to load events: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -1205,10 +1205,10 @@ async function loadXMPositions() {
 
     if (positions.length === 0) {
       container.innerHTML = `
-        <div style="text-align: center; color: var(--text-dim); padding: 3rem 1rem;">
-          <i data-lucide="shield-check" style="width: 32px; height: 32px; margin-bottom: 0.5rem; color: #10b981;"></i>
-          <div style="font-weight: 600; font-size: 0.85rem; color: var(--text-muted);">No Active Running Trades in XM MT5</div>
-          <div style="font-size: 0.72rem; margin-top: 0.25rem;">When a pending setup activates or a direct market order arrives, it executes automatically on XM MT5 with strict SL, TP, and lot size.</div>
+        <div class="empty-state">
+          <i data-lucide="shield-check" style="width: 32px; height: 32px; color: var(--success-text);"></i>
+          <div class="empty-state-title">No Active Running Trades in XM MT5</div>
+          <div class="empty-state-sub">When a pending setup activates or a direct market order arrives, it executes automatically on XM MT5 with strict SL, TP, and lot size.</div>
         </div>
       `;
       initIcons();
@@ -1216,54 +1216,50 @@ async function loadXMPositions() {
     }
 
     container.innerHTML = `
-      <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+      <div class="pos-list">
         ${positions.map(p => {
       const isBuy = (p.type || "BUY") === "BUY";
-      const profitColor = (p.profit || 0) >= 0 ? "#10b981" : "#ef4444";
+      const profitColor = (p.profit || 0) >= 0 ? "var(--success-text)" : "var(--danger-text)";
       const profitSign = (p.profit || 0) >= 0 ? "+" : "";
 
       return `
-            <div class="xm-position-card" style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.45rem;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 0.5rem;">
-                  <span style="font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: var(--text-dim);">
-                    #${p.ticket}
-                  </span>
-                  <span style="font-weight: 700; font-size: 0.9rem; color: ${isBuy ? '#34d399' : '#f87171'};">
+            <div class="pos-card">
+              <div class="pos-card-top">
+                <div class="trade-head-row">
+                  <span class="pos-id">#${p.ticket}</span>
+                  <span class="pos-symbol" style="color: ${isBuy ? 'var(--success-text)' : 'var(--danger-text)'};">
                     ${p.type} ${p.symbol}
                   </span>
-                  <span style="font-size: 0.72rem; background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 1px 6px; border-radius: 4px; font-weight: 600;">
-                    ${p.volume} Lots
-                  </span>
+                  <span class="pos-lots">${p.volume} Lots</span>
                 </div>
-                <div style="font-size: 0.85rem; font-weight: 700; color: ${profitColor};">
+                <div class="pos-pnl" style="color: ${profitColor};">
                   ${profitSign}$${Number(p.profit || 0).toFixed(2)}
                 </div>
               </div>
 
               <!-- Price levels -->
-              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; background: rgba(0,0,0,0.25); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.72rem;">
+              <div class="pos-grid">
                 <div>
-                  <div style="color: var(--text-dim); font-size: 0.65rem;">Open Price</div>
-                  <div style="font-weight: 600; color: var(--text-main);">${p.price_open}</div>
+                  <div class="pos-grid-label">Open Price</div>
+                  <div class="pos-grid-value">${p.price_open}</div>
                 </div>
                 <div>
-                  <div style="color: var(--text-dim); font-size: 0.65rem;">Market Price</div>
-                  <div style="font-weight: 600; color: var(--text-main);">${p.price_current}</div>
+                  <div class="pos-grid-label">Market Price</div>
+                  <div class="pos-grid-value">${p.price_current}</div>
                 </div>
                 <div>
-                  <div style="color: var(--text-dim); font-size: 0.65rem;">Stop Loss (SL)</div>
-                  <div style="font-weight: 600; color: #f87171;">${p.sl || 'Open'}</div>
+                  <div class="pos-grid-label">Stop Loss (SL)</div>
+                  <div class="pos-grid-value" style="color: var(--danger-text);">${p.sl || 'Open'}</div>
                 </div>
                 <div>
-                  <div style="color: var(--text-dim); font-size: 0.65rem;">Take Profit (TP)</div>
-                  <div style="font-weight: 600; color: #34d399;">${p.tp || 'Open'}</div>
+                  <div class="pos-grid-label">Take Profit (TP)</div>
+                  <div class="pos-grid-value" style="color: var(--success-text);">${p.tp || 'Open'}</div>
                 </div>
               </div>
 
-              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; color: var(--text-dim);">
+              <div class="pos-footer">
                 <span>Opened: ${p.time || 'Recently'}</span>
-                <span style="color: #10b981; font-weight: 600; display: flex; align-items: center; gap: 0.25rem;">
+                <span class="pos-handsoff">
                   <i data-lucide="lock" style="width: 10px; height: 10px;"></i>
                   Hands-Off: Position runs until TP/SL
                 </span>
@@ -1407,6 +1403,12 @@ function handleHashRouting() {
 }
 
 window.addEventListener("hashchange", handleHashRouting);
+
+// Mobile hamburger menu toggle for the landing navigation
+function toggleMobileMenu() {
+  const nav = document.getElementById("landing-nav");
+  if (nav) nav.classList.toggle("open");
+}
 
 // ============================================================
 // Multi-Tenant Authentication & Session Recovery
@@ -1687,15 +1689,13 @@ async function fetchTelegramDialogs() {
         const isChecked = savedIds.includes(String(d.id)) || (d.username && savedIds.includes(String(d.username))) ? "checked" : "";
         const badgeColor = d.type === "channel" ? "#38bdf8" : (d.type === "supergroup" ? "#a855f7" : "#10b981");
         return `
-          <label class="dialog-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.65rem; background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; margin-bottom: 5px; cursor: pointer; transition: all 0.2s;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" class="dialog-checkbox" value="${escapeHtml(String(d.id))}" data-title="${escapeHtml(d.title)}" ${isChecked} style="accent-color: #38bdf8; width: 16px; height: 16px; cursor: pointer;">
-              <div>
-                <div style="font-size: 0.8rem; font-weight: 600; color: #f1f5f9;">${escapeHtml(d.title)}</div>
-                <div style="font-size: 0.68rem; color: var(--text-dim);">${d.username ? `@${escapeHtml(d.username)}` : `ID: ${d.id}`}</div>
-              </div>
+          <label class="dialog-item">
+            <input type="checkbox" class="dialog-checkbox" value="${escapeHtml(String(d.id))}" data-title="${escapeHtml(d.title)}" ${isChecked}>
+            <div class="dialog-item-info">
+              <div class="dialog-item-title">${escapeHtml(d.title)}</div>
+              <div class="dialog-item-sub">${d.username ? `@${escapeHtml(d.username)}` : `ID: ${d.id}`}</div>
             </div>
-            <span style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); color: ${badgeColor}; border: 1px solid ${badgeColor}40;">
+            <span class="dialog-type-badge" style="color: ${badgeColor}; border-color: ${badgeColor}40;">
               ${escapeHtml(d.type)}
             </span>
           </label>
