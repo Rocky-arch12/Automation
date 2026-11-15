@@ -1410,6 +1410,16 @@ function toggleMobileMenu() {
   if (nav) nav.classList.toggle("open");
 }
 
+// Auto-close the mobile menu after a link/button is tapped
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".landing-nav-links a, .landing-nav-links button").forEach((el) => {
+    el.addEventListener("click", () => {
+      const nav = document.getElementById("landing-nav");
+      if (nav) nav.classList.remove("open");
+    });
+  });
+});
+
 // ============================================================
 // Multi-Tenant Authentication & Session Recovery
 // ============================================================

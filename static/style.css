@@ -11,7 +11,6 @@
   /* Surfaces — layered, low-contrast, cool slate */
   --bg-app: #0a0e16;
   --bg-canvas: #0c111a;
-  --bg-surface: #11182600; /* placeholder, overridden below */
   --bg-surface: #121a28;
   --bg-surface-2: #17202f;
   --bg-surface-3: #1c2636;
@@ -84,6 +83,9 @@
   --header-h: 64px;
   --content-max: 1200px;
   --radius-card: var(--r-lg);
+  /* Center dashboard content on ultra-wide screens while staying full-width on laptops.
+     Uses % (containing-block width) so it never causes horizontal overflow from scrollbars. */
+  --gutter: max(1.5rem, calc((100% - 1640px) / 2));
 }
 
 /* ----------------------------------------------------------
@@ -1803,6 +1805,7 @@ pre.code-json {
   .preview-stat-value { font-size: 0.95rem; }
 
   .params-grid { grid-template-columns: repeat(2, 1fr); gap: 0.4rem; }
+  .pos-grid { grid-template-columns: repeat(2, 1fr); }
   .param-item { padding: 0.45rem 0.55rem; }
   .param-title { font-size: 0.58rem; }
   .param-value { font-size: 0.8rem; }
