@@ -1,10 +1,18 @@
 import asyncio
 import os
 import uuid
+from datetime import datetime
 from typing import Optional, Callable, Any, List
 from pathlib import Path
 from config import settings
-from database import save_message, save_interpretation, log_event
+from database import (
+    save_message,
+    save_interpretation,
+    log_event,
+    get_channel_recent_messages,
+    get_channel_pending_trades,
+    get_channel_active_trades
+)
 from engine.interpreter import analyze_message_with_ai
 
 class TelegramListenerManager:
@@ -196,17 +204,32 @@ class TelegramListenerManager:
             source=source
         )
 
-        # 2. Analyze with AI engine (resolve local disk path)
+        # 2. Fetch past 10 messages of this group, pending setups, and open MT5 trades
+        history_messages = await get_channel_recent_messages(
+            channel_id=channel_id,
+            channel_title=channel_title,
+            limit=10,
+            exclude_message_id=msg_id
+        )
+        pending_trades = await get_channel_pending_trades(channel_id=channel_id, channel_title=channel_title)
+        active_trades = await get_channel_active_trades(channel_id=channel_id, channel_title=channel_title)
+
+        # 3. Analyze with AI engine (resolve local disk path and pass 10-message conversational context)
         image_disk_path = str(settings.BASE_DIR / media_path) if (media_path and not os.path.isabs(media_path)) else media_path
         try:
             interpretation = await analyze_message_with_ai(
                 text=text or "",
-                image_path=image_disk_path
+                image_path=image_disk_path,
+                channel_title=channel_title,
+                channel_id=channel_id,
+                history_messages=history_messages,
+                pending_trades=pending_trades,
+                active_trades=active_trades
             )
         except Exception as e:
             await log_event("ERROR", "AI_ENGINE", f"AI analysis failed: {str(e)}")
             interpretation = {
-                "intent": "INCOMPLETE",
+                "intent": "OTHERS",
                 "symbol": None,
                 "action": "NONE",
                 "order_type": "NONE",
@@ -221,7 +244,7 @@ class TelegramListenerManager:
                 "model_used": "Error"
             }
 
-        # 3. Trade Lifecycle & Correlation Manager (Unique Trade ID & Outcomes)
+        # 4. Trade Lifecycle & Execution Manager (AI 3-Way Intent Routing & XM Execution)
         trade_result = {}
         try:
             from engine.trade_manager import correlate_and_process_trade
@@ -229,24 +252,27 @@ class TelegramListenerManager:
                 message_id=msg_id,
                 interpretation=interpretation,
                 raw_text=text or "",
+                channel_id=channel_id,
+                channel_title=channel_title,
                 has_image=bool(media_path)
             )
         except Exception as te:
             print(f"[TRADE MANAGER ERROR] {te}")
 
-        # 4. Save interpretation
+        # 5. Save interpretation
         interp_id = await save_interpretation(msg_id, interpretation, trade_id=trade_result.get("trade_id"))
         
-        # 5. Construct payload for web broadcast
+        # 6. Construct payload for web broadcast
         payload = {
-            "type": "NEW_SIGNAL" if interpretation.get("intent") in ["NEW_TRADE", "TRADE_UPDATE", "CLOSE_TRADE"] else "NEW_MESSAGE",
+            "type": "NEW_SIGNAL" if interpretation.get("intent") in ["NEW_TRADE", "TRADE_UPDATE"] else "NEW_MESSAGE",
             "data": {
                 "message_id": msg_id,
                 "interpretation_id": interp_id,
                 "trade_id": trade_result.get("trade_id"),
-                "trade_status": trade_result.get("status"),
-                "trade_outcome": trade_result.get("outcome"),
-                "trade_badge_class": trade_result.get("badge_class"),
+                "trade_action": trade_result.get("action"),
+                "ticket": trade_result.get("ticket"),
+                "lots": trade_result.get("lots"),
+                "xm_response": trade_result.get("xm_response"),
                 "channel_id": channel_id,
                 "channel_title": channel_title or "ALPHA PREMIUM",
                 "sender": sender or "Owner",
@@ -261,16 +287,16 @@ class TelegramListenerManager:
                 "entry_price": interpretation.get("entry_price"),
                 "sl": interpretation.get("sl"),
                 "tp_levels": interpretation.get("tp_levels", []),
-                "risk_reward": interpretation.get("risk_reward"),
                 "confidence": interpretation.get("confidence", 0),
-                "is_trade": 1 if interpretation.get("intent") in ["NEW_TRADE", "TRADE_UPDATE", "CLOSE_TRADE"] else 0,
+                "is_trade": interpretation.get("is_trade", 0),
                 "reasoning": interpretation.get("reasoning", ""),
                 "processing_time_ms": interpretation.get("processing_time_ms", 0),
-                "model_used": interpretation.get("model_used", "")
+                "model_used": interpretation.get("model_used", "AI"),
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             }
         }
 
-        # 5. Broadcast to connected WebSocket clients
+        # 7. Broadcast to connected WebSocket clients
         await self.broadcast(payload)
 
         # Log intent decision

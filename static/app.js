@@ -1,7 +1,7 @@
 // AlphaSignal AI Frontend Application
 
 // Active Cloudflare Tunnel Fallback
-const CURRENT_ACTIVE_TUNNEL = "https://warm-table-appropriate-dept.trycloudflare.com";
+const CURRENT_ACTIVE_TUNNEL = "https://demanding-reports-street-plugins.trycloudflare.com";
 
 // Check query param for backend URL convenience: ?backend=https://...
 const urlParams = new URLSearchParams(window.location.search);
@@ -20,7 +20,10 @@ function getApiBase() {
   // Auto-heal: If stored points to any stale/expired quick tunnel, migrate to active tunnel
   const staleTunnels = [
     "recorders-retirement-prostores-touch.trycloudflare.com",
-    "effectiveness-welfare-multimedia-storage.trycloudflare.com"
+    "effectiveness-welfare-multimedia-storage.trycloudflare.com",
+    "warm-table-appropriate-dept.trycloudflare.com",
+    "thoroughly-imagination-pam-shake.trycloudflare.com",
+    "cpu-baseline-injection-patrol.trycloudflare.com"
   ];
   if (stored && staleTunnels.some(stale => stored.includes(stale))) {
     stored = CURRENT_ACTIVE_TUNNEL;
@@ -138,13 +141,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     navigateTo("landing");
   }
 
-  // Refresh stats periodically when dashboard is active
+  // Refresh stats & open XM MT5 positions periodically when dashboard is active
   setInterval(() => {
     const dash = document.getElementById("view-dashboard");
     if (dash && dash.style.display !== "none") {
       loadStats();
+      loadXMPositions();
     }
-  }, 10000);
+  }, 5000);
 });
 
 // [ReactBits: Particles / Sparkles Canvas Background]
@@ -335,8 +339,11 @@ function connectWebSocket() {
       const msg = JSON.parse(event.data);
       if (msg.type === "NEW_SIGNAL" || msg.type === "NEW_MESSAGE") {
         handleIncomingMessage(msg.data);
-      } else if (msg.type === "TRADE_UPDATED") {
         loadTrades();
+        loadXMPositions();
+      } else if (msg.type === "TRADE_UPDATED" || msg.type === "TRADES_EXPIRED" || msg.type === "DATA_RESET") {
+        loadTrades();
+        loadXMPositions();
         loadMessages();
         loadStats();
       } else if (msg.type === "SYSTEM_STATUS") {
@@ -480,17 +487,14 @@ function renderFeed(messages) {
 
 function getOutcomeBadgeClass(status) {
   const map = {
-    'PARTIAL_1_TO_1': 'badge-1to1',
-    'BREAK_EVEN': 'badge-breakeven',
-    'TP_HIT': 'badge-tp-hit',
+    'PENDING': 'badge-pending',
+    'EXECUTED': 'badge-executed',
+    'CANCELLED': 'badge-cancelled',
     'SL_HIT': 'badge-sl-hit',
-    'MISSED_NOT_TAPPED': 'badge-missed',
-    'EARLY_EXECUTION': 'badge-early',
-    'LEVEL_TAPPED': 'badge-tapped',
-    'ACTIVE': 'badge-active',
-    'PENDING': 'badge-pending'
+    'TP_HIT': 'badge-tp-hit',
+    'ACTIVE': 'badge-active'
   };
-  return map[status] || 'badge-active';
+  return map[status] || 'badge-pending';
 }
 
 function createSignalCardHtml(msg) {
@@ -689,20 +693,25 @@ function switchRightTab(tabId, btn) {
       const allBtns = document.querySelectorAll(".tab-nav-btn, .tab-btn");
       if (tabId === "simulator" && allBtns[0]) allBtns[0].classList.add("active");
       if (tabId === "watchlist" && allBtns[1]) allBtns[1].classList.add("active");
-      if (tabId === "terminal" && allBtns[2]) allBtns[2].classList.add("active");
+      if (tabId === "positions" && allBtns[2]) allBtns[2].classList.add("active");
+      if (tabId === "terminal" && allBtns[3]) allBtns[3].classList.add("active");
     }
   }
 
   const simEl = document.getElementById("tab-simulator");
   const watchEl = document.getElementById("tab-watchlist");
+  const posEl = document.getElementById("tab-positions");
   const termEl = document.getElementById("tab-terminal");
 
   if (simEl) simEl.style.display = tabId === "simulator" ? "block" : "none";
   if (watchEl) watchEl.style.display = tabId === "watchlist" ? "block" : "none";
+  if (posEl) posEl.style.display = tabId === "positions" ? "block" : "none";
   if (termEl) termEl.style.display = tabId === "terminal" ? "block" : "none";
 
   if (tabId === "watchlist") {
     loadTrades();
+  } else if (tabId === "positions") {
+    loadXMPositions();
   } else if (tabId === "terminal") {
     loadLogs();
   }
@@ -712,21 +721,12 @@ function switchRightTab(tabId, btn) {
 // Preset Prompts for instant testing of all signal intents & outcomes
 function injectPreset(type) {
   const presetMap = {
-    "PENDING": "BE READY ON THIS LEVEL 4052.90 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 4049.93 TP 4070.21",
-    "TAPPED": "LEVEL TAPED",
-    "NEGATION": "active mat krna abhi",
-    "ACTIVE": "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
-    "EARLY_ACTIVE": "ACTIVE! Enter now CMP on XAUUSD trade given earlier",
-    "PARTIAL_1_TO_1": "1:1 DONE You can book partial profit here 🚀 safe traders can book",
-    "PARTIAL": "1:1 DONE You can book partial profit here 🚀 safe traders can book",
-    "RISK_FREE": "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
-    "BREAKEVEN": "RISK FREE KRDO - Move your SL to entry / cost right now and hold",
-    "FULL_TP": "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
-    "TP_HIT": "FULL TP HIT! All targets completed, book all your profits traders ❤️‍🔥🚀",
-    "SL_HIT": "SL HIT on gold trade. Respect risk management, closed.",
-    "NOT_TAPPED": "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
-    "CANCEL": "LEVEL NOT TAPPED. Market reversed before reaching our level, setup cancelled.",
-    "CHATTER": "ye crazyy hogya guyss enjoy your weekend, 5/5 trades smashed! party hard!",
+    "PENDING": "BE READY ON THIS LEVEL 2640-2642 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 2634 TP 2655",
+    "ACTIVE_MARKET": "BUY BTCUSDT CMP 68100 SL 67800 TP 68900 ACTIVE NOW",
+    "ACTIVATE_CONFIRM": "ACTIVE NOW, ENTER FAST! 1m confirmation candle closed.",
+    "ACTIVATE": "ACTIVE NOW, ENTER FAST! 1m confirmation candle closed.",
+    "CANCEL": "Setup cancelled guys, level not tapped do not enter.",
+    "CHATTER": "Good morning traders! Hope everyone had a great weekend 🚀",
     "gold_buy": "BUY GOLD NOW 2642.50 SL 2636.00 TP1 2648.00 TP2 2656.00",
     "btc_short": "BTC SHORT NOW 91250 SL 91900 TP1 90400 TP2 89500"
   };
@@ -1000,12 +1000,33 @@ function renderTrades(trades) {
           </div>
         </div>
 
-        ${t.pnl_notes ? `
-          <div style="font-size: 0.72rem; padding: 0.35rem 0.6rem; border-radius: 5px; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; ${t.pnl_notes.includes('SAFETY SHIELD') ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;' : t.pnl_notes.includes('XM #') ? 'background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #6ee7b7;' : 'background: rgba(0,0,0,0.25); color: var(--text-muted);'}">
-            <i data-lucide="${t.pnl_notes.includes('SAFETY SHIELD') ? 'shield-alert' : t.pnl_notes.includes('XM #') ? 'zap' : 'info'}" style="width: 13px; height: 13px; flex-shrink: 0;"></i>
+        ${t.xm_ticket ? `
+          <div class="xm-execution-receipt" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.75rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;">
+              <span style="font-weight: 700; color: #34d399; display: flex; align-items: center; gap: 0.35rem;">
+                <i data-lucide="check-circle-2" style="width: 14px; height: 14px;"></i>
+                XM MT5 Order Executed
+              </span>
+              <span style="font-size: 0.7rem; color: #a7f3d0; background: rgba(16, 185, 129, 0.2); padding: 1px 7px; border-radius: 4px; font-weight: 700;">
+                Ticket #${t.xm_ticket}
+              </span>
+            </div>
+            <div style="display: flex; gap: 0.8rem; font-size: 0.72rem; color: var(--text-muted);">
+              <div>Lots: <strong style="color:var(--text-main);">${t.xm_lots || (t.symbol && t.symbol.includes('BTC') ? '0.04' : (t.symbol && (t.symbol.includes('XAU') || t.symbol.includes('GOLD')) ? '0.02' : '0.01'))}</strong></div>
+              <div>Fill Price: <strong style="color:var(--text-main);">${t.xm_execution_price || t.entry_price || 'CMP'}</strong></div>
+              <div>SL: <strong style="color:#f87171;">${t.sl || 'Open'}</strong></div>
+              <div>TP: <strong style="color:#34d399;">${tpDisplay}</strong></div>
+            </div>
+            <div style="font-size: 0.68rem; color: #34d399; margin-top: 0.3rem; font-weight: 600;">
+              🛡️ XM Policy: Running Hands-Off until TP or SL is reached.
+            </div>
+          </div>
+        ` : (t.pnl_notes ? `
+          <div style="font-size: 0.72rem; padding: 0.35rem 0.6rem; border-radius: 5px; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; ${t.pnl_notes.includes('SAFETY SHIELD') || t.pnl_notes.includes('REJECTED') ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;' : 'background: rgba(0,0,0,0.25); color: var(--text-muted);'}">
+            <i data-lucide="${t.pnl_notes.includes('SAFETY SHIELD') || t.pnl_notes.includes('REJECTED') ? 'shield-alert' : 'info'}" style="width: 13px; height: 13px; flex-shrink: 0;"></i>
             <span>${escapeHtml(t.pnl_notes)}</span>
           </div>
-        ` : ''}
+        ` : '')}
 
         <!-- Actions & Timeline Row -->
         <div class="trade-card-actions">
@@ -1015,17 +1036,19 @@ function renderTrades(trades) {
           </button>
 
           <div style="margin-left: auto; display: flex; align-items: center; gap: 0.35rem;">
-            <span style="font-size: 0.68rem; color: var(--text-dim);">Set Outcome:</span>
-            <select class="outcome-select" onchange="updateTradeStatusManual('${t.trade_id}', this.value)">
-              <option value="" disabled selected>-- Select Outcome --</option>
-              <option value="PARTIAL_1_TO_1" ${t.status === 'PARTIAL_1_TO_1' ? 'selected' : ''}>🎯 4. 1:1 Given (Partial Booked)</option>
-              <option value="BREAK_EVEN" ${t.status === 'BREAK_EVEN' ? 'selected' : ''}>🛡️ 3. Break Even (Risk Free)</option>
-              <option value="TP_HIT" ${t.status === 'TP_HIT' ? 'selected' : ''}>🏆 2. Full TP Hit</option>
-              <option value="SL_HIT" ${t.status === 'SL_HIT' ? 'selected' : ''}>🛑 1. SL Hit</option>
-              <option value="MISSED_NOT_TAPPED" ${t.status === 'MISSED_NOT_TAPPED' ? 'selected' : ''}>❌ 5. Level Not Tapped</option>
-              <option value="EARLY_EXECUTION" ${t.status === 'EARLY_EXECUTION' ? 'selected' : ''}>⚡ 6. Early Exec (Active sign)</option>
-              <option value="ACTIVE" ${t.status === 'ACTIVE' ? 'selected' : ''}>🔵 Active & Running</option>
-            </select>
+            ${t.status === 'PENDING' ? `
+              <button class="btn btn-sm" onclick="updateTradeStatusManual('${t.trade_id}', 'CANCELLED')" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.7rem; padding: 0.2rem 0.5rem;">
+                <i data-lucide="x" style="width: 11px; height: 11px;"></i> Cancel Setup
+              </button>
+            ` : t.status === 'EXECUTED' ? `
+              <span style="font-size: 0.72rem; color: #10b981; font-weight: 700; display: flex; align-items: center; gap: 0.25rem;">
+                <i data-lucide="lock" style="width: 11px; height: 11px;"></i> XM Hands-Off
+              </span>
+            ` : `
+              <span style="font-size: 0.72rem; color: var(--text-dim);">
+                ${escapeHtml(t.outcome || t.status)}
+              </span>
+            `}
           </div>
         </div>
 
@@ -1115,6 +1138,119 @@ async function updateTradeStatusManual(tradeId, newStatus) {
     }
   } catch (e) {
     showToast("Request failed: " + e.message, "error");
+  }
+}
+
+// Active XM MT5 Positions Loader
+async function loadXMPositions() {
+  const container = document.getElementById("positions-container");
+  if (!container) return;
+
+  try {
+    const res = await fetch("/api/xm/positions");
+    const data = await res.json();
+    const positions = data.positions || [];
+    const count = data.count || 0;
+
+    // Update badge in tab header
+    const badge = document.getElementById("open-positions-badge");
+    if (badge) {
+      badge.innerText = count;
+      badge.style.display = count > 0 ? "inline-block" : "none";
+    }
+
+    // Update meta bar
+    const metaCount = document.getElementById("xm-meta-count");
+    if (metaCount) metaCount.innerText = count;
+
+    if (data.account) {
+      const srvEl = document.getElementById("xm-meta-server");
+      if (srvEl) srvEl.innerText = data.account.server || "XMGlobal-MT5";
+      const accEl = document.getElementById("xm-meta-account");
+      if (accEl) accEl.innerText = "#" + (data.account.login || "Demo");
+    }
+
+    let totalProfit = 0;
+    positions.forEach(p => { totalProfit += (p.profit || 0); });
+    const pnlEl = document.getElementById("xm-meta-pnl");
+    if (pnlEl) {
+      pnlEl.innerText = (totalProfit >= 0 ? "+$" : "-$") + Math.abs(totalProfit).toFixed(2);
+      pnlEl.style.color = totalProfit >= 0 ? "#10b981" : "#ef4444";
+    }
+
+    if (positions.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; color: var(--text-dim); padding: 3rem 1rem;">
+          <i data-lucide="shield-check" style="width: 32px; height: 32px; margin-bottom: 0.5rem; color: #10b981;"></i>
+          <div style="font-weight: 600; font-size: 0.85rem; color: var(--text-muted);">No Active Running Trades in XM MT5</div>
+          <div style="font-size: 0.72rem; margin-top: 0.25rem;">When a pending setup activates or a direct market order arrives, it executes automatically on XM MT5 with strict SL, TP, and lot size.</div>
+        </div>
+      `;
+      initIcons();
+      return;
+    }
+
+    container.innerHTML = `
+      <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+        ${positions.map(p => {
+          const isBuy = (p.type || "BUY") === "BUY";
+          const profitColor = (p.profit || 0) >= 0 ? "#10b981" : "#ef4444";
+          const profitSign = (p.profit || 0) >= 0 ? "+" : "";
+
+          return `
+            <div class="xm-position-card" style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.45rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <span style="font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: var(--text-dim);">
+                    #${p.ticket}
+                  </span>
+                  <span style="font-weight: 700; font-size: 0.9rem; color: ${isBuy ? '#34d399' : '#f87171'};">
+                    ${p.type} ${p.symbol}
+                  </span>
+                  <span style="font-size: 0.72rem; background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 1px 6px; border-radius: 4px; font-weight: 600;">
+                    ${p.volume} Lots
+                  </span>
+                </div>
+                <div style="font-size: 0.85rem; font-weight: 700; color: ${profitColor};">
+                  ${profitSign}$${Number(p.profit || 0).toFixed(2)}
+                </div>
+              </div>
+
+              <!-- Price levels -->
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; background: rgba(0,0,0,0.25); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.72rem;">
+                <div>
+                  <div style="color: var(--text-dim); font-size: 0.65rem;">Open Price</div>
+                  <div style="font-weight: 600; color: var(--text-main);">${p.price_open}</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-dim); font-size: 0.65rem;">Market Price</div>
+                  <div style="font-weight: 600; color: var(--text-main);">${p.price_current}</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-dim); font-size: 0.65rem;">Stop Loss (SL)</div>
+                  <div style="font-weight: 600; color: #f87171;">${p.sl || 'Open'}</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-dim); font-size: 0.65rem;">Take Profit (TP)</div>
+                  <div style="font-weight: 600; color: #34d399;">${p.tp || 'Open'}</div>
+                </div>
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; color: var(--text-dim);">
+                <span>Opened: ${p.time || 'Recently'}</span>
+                <span style="color: #10b981; font-weight: 600; display: flex; align-items: center; gap: 0.25rem;">
+                  <i data-lucide="lock" style="width: 10px; height: 10px;"></i>
+                  Hands-Off: Position runs until TP/SL
+                </span>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+    initIcons();
+  } catch (e) {
+    console.error("Failed to load XM positions:", e);
   }
 }
 
@@ -1792,14 +1928,16 @@ async function saveSettings(silent = false) {
 
 // Wipe / Clear Data
 async function confirmClearData() {
-  if (confirm("Are you sure you want to clear all message logs and signal history?")) {
+  if (confirm("Are you sure you want to clear all message logs, active trades, and signal history?")) {
     try {
-      await fetch("/api/clear", { method: "POST" });
+      await fetch("/api/reset-data", { method: "POST" });
       messagesCache = [];
       renderFeed([]);
       loadStats();
       loadLogs();
-      showToast("All message logs and signal history wiped clean.", "info");
+      loadTrades();
+      loadXMPositions();
+      showToast("All message logs, trades, and history wiped clean.", "info");
     } catch (e) {
       showToast("Failed to clear data: " + e.message, "error");
     }

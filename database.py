@@ -174,6 +174,20 @@ async def init_db():
         except Exception:
             pass
 
+        # Columns for XM MT5 Execution Receipt & Channel Tracking
+        for col_name, col_type in [
+            ("xm_ticket", "INTEGER"),
+            ("xm_execution_price", "REAL"),
+            ("xm_response", "TEXT"),
+            ("xm_lots", "REAL"),
+            ("channel_id", "TEXT"),
+            ("channel_title", "TEXT"),
+        ]:
+            try:
+                await conn.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+            except Exception:
+                pass
+
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
@@ -481,21 +495,29 @@ async def create_trade(data: Dict[str, Any]) -> str:
     tp_levels = data.get("tp_levels", [])
     tp_str = json.dumps(tp_levels) if isinstance(tp_levels, list) else str(tp_levels)
 
-    status = data.get("status", "ACTIVE")
-    outcome = data.get("outcome", "Trade Active & Running")
-    is_active = 0 if status in ["SL_HIT", "TP_HIT", "MISSED_NOT_TAPPED"] else 1
+    status = data.get("status", "PENDING")
+    outcome = data.get("outcome", "Pending Setup (Awaiting Owner Confirmation)")
+    is_active = 0 if status in ["CANCELLED", "SL_HIT", "TP_HIT"] else 1
     init_msg_id = data.get("initial_message_id")
+    channel_id = data.get("channel_id")
+    channel_title = data.get("channel_title")
+    xm_ticket = data.get("xm_ticket")
+    xm_execution_price = data.get("xm_execution_price")
+    xm_response = data.get("xm_response")
+    xm_lots = data.get("xm_lots")
 
     async with get_db() as conn:
         await conn.execute("""
             INSERT INTO trades (
                 trade_id, symbol, action, order_type, entry_price, sl, tp_levels,
-                risk_reward, status, outcome, is_active, initial_message_id, last_message_id, pnl_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                risk_reward, status, outcome, is_active, initial_message_id, last_message_id, pnl_notes,
+                channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_id, symbol, action, order_type, entry_price, sl, tp_str,
             data.get("risk_reward"), status, outcome, is_active, init_msg_id, init_msg_id,
-            data.get("pnl_notes", outcome)
+            data.get("pnl_notes", outcome),
+            channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots
         ))
 
         # Insert initial trade event
@@ -517,34 +539,196 @@ async def update_trade_outcome(
     outcome: str,
     notes: str,
     message_id: Optional[int] = None,
-    new_sl: Optional[str] = None
+    new_sl: Optional[str] = None,
+    xm_ticket: Optional[int] = None,
+    xm_execution_price: Optional[float] = None,
+    xm_response: Optional[str] = None,
+    xm_lots: Optional[float] = None
 ):
     """Updates a trade's lifecycle outcome and appends to the trade_events audit trail."""
-    is_terminal = new_status in ["SL_HIT", "TP_HIT", "MISSED_NOT_TAPPED"]
+    is_terminal = new_status in ["CANCELLED", "SL_HIT", "TP_HIT"]
     is_active = 0 if is_terminal else 1
 
     async with get_db() as conn:
         # Get previous status
-        cursor = await conn.execute("SELECT status, sl FROM trades WHERE trade_id = ?", (trade_id,))
+        cursor = await conn.execute("SELECT status, sl, xm_ticket, xm_lots FROM trades WHERE trade_id = ?", (trade_id,))
         row = await cursor.fetchone()
         prev_status = row["status"] if row else None
         current_sl = row["sl"] if row else None
+        cur_ticket = row["xm_ticket"] if row else None
+        cur_lots = row["xm_lots"] if row else None
 
         sl_to_save = new_sl if new_sl is not None else current_sl
+        ticket_to_save = xm_ticket if xm_ticket is not None else cur_ticket
+        lots_to_save = xm_lots if xm_lots is not None else cur_lots
 
         await conn.execute("""
             UPDATE trades 
             SET status = ?, outcome = ?, pnl_notes = ?, is_active = ?,
                 last_message_id = COALESCE(?, last_message_id),
-                sl = ?, updated_at = CURRENT_TIMESTAMP
+                sl = ?, xm_ticket = ?, xm_execution_price = COALESCE(?, xm_execution_price),
+                xm_response = COALESCE(?, xm_response), xm_lots = ?, updated_at = CURRENT_TIMESTAMP
             WHERE trade_id = ?
-        """, (new_status, outcome, notes, is_active, message_id, sl_to_save, trade_id))
+        """, (new_status, outcome, notes, is_active, message_id, sl_to_save, ticket_to_save, xm_execution_price, xm_response, lots_to_save, trade_id))
 
         await conn.execute("""
             INSERT INTO trade_events (
                 trade_id, message_id, event_type, previous_status, new_status, notes
             ) VALUES (?, ?, ?, ?, ?, ?)
         """, (trade_id, message_id, new_status, prev_status, new_status, notes))
+
+        if message_id:
+            await conn.execute("UPDATE messages SET trade_id = ? WHERE id = ?", (trade_id, message_id))
+            await conn.execute("UPDATE interpretations SET trade_id = ? WHERE message_id = ?", (trade_id, message_id))
+
+        await conn.commit()
+
+async def get_channel_recent_messages(
+    channel_id: Optional[str] = None,
+    channel_title: Optional[str] = None,
+    limit: int = 10,
+    exclude_message_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """
+    Returns the last `limit` messages from this channel in chronological order (oldest first)
+    along with their interpretations and media paths for AI context.
+    """
+    query = """
+        SELECT 
+            m.id as message_id,
+            m.channel_id,
+            m.channel_title,
+            m.sender,
+            m.text,
+            m.media_type,
+            m.media_path,
+            m.trade_id,
+            m.created_at,
+            i.intent,
+            i.symbol,
+            i.action,
+            i.order_type,
+            i.entry_price,
+            i.sl,
+            i.tp_levels,
+            i.reasoning
+        FROM messages m
+        LEFT JOIN interpretations i ON m.id = i.message_id
+        WHERE 1=1
+    """
+    params = []
+    if exclude_message_id:
+        query += " AND m.id != ?"
+        params.append(exclude_message_id)
+
+    if channel_id and channel_id != "unknown":
+        query += " AND (m.channel_id = ? OR m.channel_title = ?)"
+        params.extend([channel_id, channel_title or ""])
+    elif channel_title:
+        query += " AND m.channel_title = ?"
+        params.append(channel_title)
+
+    query += " ORDER BY m.id DESC LIMIT ?"
+    params.append(limit)
+
+    async with get_db() as conn:
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
+        # Reverse to chronological order (oldest to newest)
+        results = [dict(r) for r in reversed(rows)]
+        for d in results:
+            if d.get("tp_levels"):
+                try:
+                    d["tp_levels"] = json.loads(d["tp_levels"])
+                except Exception:
+                    d["tp_levels"] = [d["tp_levels"]]
+            else:
+                d["tp_levels"] = []
+        return results
+
+async def get_channel_pending_trades(
+    channel_id: Optional[str] = None,
+    channel_title: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Returns currently pending trade setups in this channel awaiting activation."""
+    query = """
+        SELECT * FROM trades 
+        WHERE status = 'PENDING' AND is_active = 1
+    """
+    params = []
+    if channel_id and channel_id != "unknown":
+        query += " AND (channel_id = ? OR channel_id IS NULL OR channel_id = '' OR channel_title = ?)"
+        params.extend([channel_id, channel_title or ""])
+    query += " ORDER BY id DESC"
+
+    async with get_db() as conn:
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
+        results = [dict(r) for r in rows]
+        for d in results:
+            if d.get("tp_levels"):
+                try:
+                    d["tp_levels"] = json.loads(d["tp_levels"])
+                except Exception:
+                    d["tp_levels"] = [d["tp_levels"]]
+        return results
+
+async def get_channel_active_trades(
+    channel_id: Optional[str] = None,
+    channel_title: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Returns currently active/running executed trades in MT5."""
+    query = """
+        SELECT * FROM trades 
+        WHERE status = 'EXECUTED' AND is_active = 1
+    """
+    params = []
+    if channel_id and channel_id != "unknown":
+        query += " AND (channel_id = ? OR channel_id IS NULL OR channel_id = '' OR channel_title = ?)"
+        params.extend([channel_id, channel_title or ""])
+    query += " ORDER BY id DESC"
+
+    async with get_db() as conn:
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
+        results = [dict(r) for r in rows]
+        for d in results:
+            if d.get("tp_levels"):
+                try:
+                    d["tp_levels"] = json.loads(d["tp_levels"])
+                except Exception:
+                    d["tp_levels"] = [d["tp_levels"]]
+        return results
+
+async def expire_old_pending_trades(max_age_seconds: int = 7200) -> List[str]:
+    """
+    Cancels pending trades that have had no update within max_age_seconds (default 2 hours).
+    Returns list of expired trade IDs.
+    """
+    async with get_db() as conn:
+        cursor = await conn.execute("""
+            SELECT trade_id, symbol, created_at FROM trades
+            WHERE status = 'PENDING' AND is_active = 1
+            AND (strftime('%s', 'now') - strftime('%s', created_at)) > ?
+        """, (max_age_seconds,))
+        rows = await cursor.fetchall()
+        expired_ids = []
+        for r in rows:
+            tid = r["trade_id"]
+            expired_ids.append(tid)
+            await conn.execute("""
+                UPDATE trades
+                SET status = 'CANCELLED', outcome = 'Auto-Cancelled (No update within 2 hours)',
+                    is_active = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE trade_id = ?
+            """, (tid,))
+            await conn.execute("""
+                INSERT INTO trade_events (trade_id, event_type, previous_status, new_status, notes)
+                VALUES (?, 'EXPIRED', 'PENDING', 'CANCELLED', 'Setup expired: No activation received within 2 hours.')
+            """, (tid,))
+        if expired_ids:
+            await conn.commit()
+        return expired_ids
 
         if message_id:
             await conn.execute("UPDATE messages SET trade_id = ? WHERE id = ?", (trade_id, message_id))
@@ -811,8 +995,30 @@ async def get_all_settings(user_id: str = "default") -> Dict[str, str]:
     return await get_user_all_settings(user_id)
 
 async def clear_all_data():
+    """Wipes signal history, trades, events, interpretations, and logs for a clean slate."""
     async with get_db() as conn:
-        await conn.execute("DELETE FROM interpretations")
-        await conn.execute("DELETE FROM messages")
-        await conn.execute("DELETE FROM system_logs")
+        try:
+            await conn.execute("DELETE FROM trade_events")
+        except Exception:
+            pass
+        try:
+            await conn.execute("DELETE FROM trades")
+        except Exception:
+            pass
+        try:
+            await conn.execute("DELETE FROM interpretations")
+        except Exception:
+            pass
+        try:
+            await conn.execute("DELETE FROM messages")
+        except Exception:
+            pass
+        try:
+            await conn.execute("DELETE FROM system_logs")
+        except Exception:
+            pass
+        try:
+            await conn.execute("DELETE FROM mt5_executions")
+        except Exception:
+            pass
         await conn.commit()

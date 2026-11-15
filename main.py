@@ -24,6 +24,7 @@ from database import (
     get_all_settings, set_setting, set_settings_bulk, log_event, clear_all_data,
     save_message, save_interpretation,
     get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome,
+    expire_old_pending_trades,
     create_user, get_user_by_email, get_user_by_id, get_user_all_settings,
     get_user_setting, set_user_setting, SENSITIVE_KEYS
 )
@@ -117,9 +118,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         await log_event("WARN", "XM_MT5", f"XM MT5 startup initialization warning: {e}")
 
+    # Background worker: 2-Hour Inactivity Auto-Cancellation for Pending Trades
+    async def _expiration_worker():
+        while True:
+            try:
+                await asyncio.sleep(30)
+                expired_ids = await expire_old_pending_trades(max_age_seconds=7200)
+                if expired_ids:
+                    await ws_manager.broadcast({
+                        "type": "TRADES_EXPIRED",
+                        "data": {"expired_trade_ids": expired_ids}
+                    })
+                    await log_event("INFO", "TRADE_LIFECYCLE", f"Auto-cancelled {len(expired_ids)} expired trade(s): {expired_ids}")
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                print(f"[EXPIRATION WORKER ERROR] {ex}")
+
+    exp_task = asyncio.create_task(_expiration_worker())
+
     yield
 
     # Shutdown
+    exp_task.cancel()
     if listener_manager.is_running:
         await listener_manager.stop_listener()
     await log_event("INFO", "SYSTEM", "AlphaSignal AI server shutting down.")
@@ -300,6 +321,27 @@ async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate
     })
 
     return {"status": "success", "trade_id": trade_id, "new_status": payload.status, "outcome": outcome_info["title"]}
+
+# --- Active XM MT5 Positions Endpoint ---
+@app.get("/api/xm/positions")
+async def get_xm_open_positions():
+    """Returns active open positions from MT5 or simulated sandbox."""
+    positions = await xm_executor.get_open_positions()
+    return {
+        "status": "success",
+        "positions": positions,
+        "count": len(positions),
+        "account": xm_executor.account_info,
+        "mode": "LIVE_MT5" if (xm_executor.is_connected and not xm_executor.is_mock_mode) else "DEMO_SANDBOX"
+    }
+
+# --- Database Slate Reset Endpoint (Clean start) ---
+@app.post("/api/reset-data")
+async def reset_data_endpoint():
+    """Clears signal history, trades, events, interpretations, and logs for a clean slate."""
+    await clear_all_data()
+    await ws_manager.broadcast({"type": "DATA_RESET"})
+    return {"status": "success", "message": "All signal and trade data reset successfully."}
 
 # --- Multi-Tenant User Authentication & OAuth Endpoints ---
 class RegisterRequest(BaseModel):

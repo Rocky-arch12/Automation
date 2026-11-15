@@ -1351,6 +1351,19 @@ pre.code-json {
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.1);
 }
 
+.outcome-badge.badge-executed {
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  color: #34d399;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+}
+
+.outcome-badge.badge-cancelled {
+  background: rgba(100, 116, 139, 0.18);
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  color: #94a3b8;
+}
+
 .outcome-badge.badge-pending {
   background: rgba(234, 179, 8, 0.15);
   border: 1px solid rgba(234, 179, 8, 0.45);
@@ -1363,6 +1376,17 @@ pre.code-json {
   border: 1px solid rgba(245, 158, 11, 0.55);
   color: #fbbf24;
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.15);
+}
+
+.xm-position-card {
+  transition: all 0.2s ease;
+}
+.xm-position-card:hover {
+  border-color: rgba(56, 189, 248, 0.35) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.xm-execution-receipt {
+  animation: fadeIn 0.3s ease;
 }
 
 /* ============================================================

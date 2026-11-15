@@ -1,12 +1,14 @@
 import json
 import re
-from typing import Dict, Any, Optional, List, Tuple
+import time
+from datetime import datetime
+from typing import Dict, Any, Optional, List
 from database import (
     create_trade,
     update_trade_outcome,
-    get_active_trades_for_symbol,
     get_trade_by_id,
-    get_preceding_message_trade_id,
+    get_channel_pending_trades,
+    get_channel_active_trades,
     generate_trade_id,
     update_message_trade_id,
     log_event,
@@ -14,445 +16,410 @@ from database import (
 )
 from engine.xm_executor import xm_executor
 
-# --- The 6 Specific Outcomes Requested ---
+# Clean Lifecycle Outcomes (Artificial labels like "level given but executed early" and "partial 1:1" removed)
 TRADE_OUTCOMES = {
-    "SL_HIT": {
-        "code": "SL_HIT",
-        "title": "Trade executed and SL hit",
-        "badge_class": "badge-sl-hit",
-        "color": "#ef4444",
-        "is_terminal": True,
-        "is_active": 0,
-        "description": "Price moved against the position and hit Stop Loss."
-    },
-    "TP_HIT": {
-        "code": "TP_HIT",
-        "title": "Trade executed and TP hit",
-        "badge_class": "badge-tp-hit",
-        "color": "#10b981",
-        "is_terminal": True,
-        "is_active": 0,
-        "description": "Full Take Profit target reached. Profit booked."
-    },
-    "BREAK_EVEN": {
-        "code": "BREAK_EVEN",
-        "title": "Trade executed and break even",
-        "badge_class": "badge-breakeven",
-        "color": "#06b6d4",
-        "is_terminal": False,
-        "is_active": 1,
-        "description": "Stop Loss moved to cost / entry (Risk Free trade)."
-    },
-    "PARTIAL_1_TO_1": {
-        "code": "PARTIAL_1_TO_1",
-        "title": "1:1 Hit (50% Closed, SL to BE, TP to 1:2)",
-        "badge_class": "badge-1to1",
-        "color": "#8b5cf6",
-        "is_terminal": False,
-        "is_active": 1,
-        "description": "50% lots closed at 1:1 RR. Stop loss moved to entry price (Risk-Free) and TP extended to 1:2."
-    },
-    "MISSED_NOT_TAPPED": {
-        "code": "MISSED_NOT_TAPPED",
-        "title": "Trade given but level didn't tapped",
-        "badge_class": "badge-missed",
-        "color": "#64748b",
-        "is_terminal": True,
-        "is_active": 0,
-        "description": "Pending level was not reached by market price; setup cancelled or invalidated."
-    },
-    "EARLY_EXECUTION": {
-        "code": "EARLY_EXECUTION",
-        "title": "Level given but executed early (Active sign)",
-        "badge_class": "badge-early",
-        "color": "#f59e0b",
-        "is_terminal": False,
-        "is_active": 1,
-        "description": "Pending level was entered before exact tap because owner signaled 'ACTIVE'."
-    },
-    "LEVEL_TAPPED": {
-        "code": "LEVEL_TAPPED",
-        "title": "Level Tapped (Alert - Wait for Confirmation)",
-        "badge_class": "badge-tapped",
-        "color": "#f59e0b",
-        "is_terminal": False,
-        "is_active": 1,
-        "description": "Price reached/tapped the pending zone. Alert sent to traders to prepare; awaiting candle confirmation/active call."
-    },
-    "ACTIVE": {
-        "code": "ACTIVE",
-        "title": "Trade Active & Running",
-        "badge_class": "badge-active",
-        "color": "#3b82f6",
-        "is_terminal": False,
-        "is_active": 1,
-        "description": "Position is actively running in the market."
-    },
     "PENDING": {
         "code": "PENDING",
-        "title": "Pending Level (Waiting for Tap)",
+        "title": "Pending Setup (Awaiting Owner Confirmation)",
         "badge_class": "badge-pending",
         "color": "#eab308",
         "is_terminal": False,
         "is_active": 1,
-        "description": "Setup given; waiting for market price to tap level or candlestick confirmation."
+        "description": "Setup detected in channel; awaiting owner activation message before executing on XM MT5."
+    },
+    "EXECUTED": {
+        "code": "EXECUTED",
+        "title": "XM MT5: Running Hands-Off",
+        "badge_class": "badge-executed",
+        "color": "#10b981",
+        "is_terminal": False,
+        "is_active": 1,
+        "description": "Executed on XM MT5 with mandatory SL and TP. Running hands-off until SL or TP is reached."
+    },
+    "CANCELLED": {
+        "code": "CANCELLED",
+        "title": "Cancelled / Expired",
+        "badge_class": "badge-cancelled",
+        "color": "#64748b",
+        "is_terminal": True,
+        "is_active": 0,
+        "description": "Setup cancelled by owner or automatically expired after 2 hours without activation."
+    },
+    "SL_HIT": {
+        "code": "SL_HIT",
+        "title": "Stop Loss Hit",
+        "badge_class": "badge-sl-hit",
+        "color": "#ef4444",
+        "is_terminal": True,
+        "is_active": 0,
+        "description": "Position hit Stop Loss on XM MT5 terminal."
+    },
+    "TP_HIT": {
+        "code": "TP_HIT",
+        "title": "Take Profit Hit",
+        "badge_class": "badge-tp-hit",
+        "color": "#10b981",
+        "is_terminal": True,
+        "is_active": 0,
+        "description": "Position hit Take Profit on XM MT5 terminal."
     }
 }
 
-def normalize_symbol(symbol: Optional[str], text: Optional[str] = None) -> Optional[str]:
+def normalize_symbol(symbol: Optional[str], text: Optional[str] = None) -> str:
+    """Normalizes symbol string to standard broker codes."""
     s = (symbol or "").upper().strip()
     t = (text or "").upper().strip()
-
+    
     if "GOLD" in s or "XAU" in s or "GOLD" in t or "XAU" in t:
         return "XAUUSD"
     if "BTC" in s or "BITCOIN" in s or "BTC" in t or "BITCOIN" in t:
         return "BTCUSDT"
-    if "ETH" in s or "ETHEREUM" in s or "ETH" in t or "ETHEREUM" in t:
+    if "ETH" in s or "ETHEREUM" in s or "ETH" in t:
         return "ETHUSDT"
+    if "EUR" in s or "EUR" in t:
+        return "EURUSD"
     if "GBP" in s or "CABLE" in s or "GBP" in t:
         return "GBPUSD"
     
-    return s if s else None
+    return s if s else "XAUUSD"
 
-def detect_outcome_from_message(
-    text: str,
-    interpretation: Dict[str, Any],
-    has_image: bool = False
-) -> Optional[str]:
-    """
-    Detects which of the lifecycle outcomes is indicated by the message text or intent.
-    Respects negations (e.g. 'active mat krna abhi') and treats 'LEVEL TAPPED' strictly
-    as a preparatory alert rather than an trade activation.
-    """
-    t = (text or "").upper()
-    action = (interpretation.get("action") or "").upper()
-    intent = (interpretation.get("intent") or "").upper()
+def parse_entry_price(val: Any) -> float:
+    """Parses numeric price from single values, ranges (e.g. '2640-2642'), or text."""
+    if not val:
+        return 0.0
+    s = str(val).strip().replace(",", "")
+    numbers = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', s)]
+    if len(numbers) >= 2 and any(sep in s for sep in ["-", "/", "TO", "to"]):
+        return round((numbers[0] + numbers[1]) / 2.0, 2)
+    elif len(numbers) >= 1:
+        return numbers[0]
+    return 0.0
 
-    # Negation guard: Check for explicit "do not enter / wait" phrases in Hinglish/English
-    is_negated = any(k in t for k in [
-        "MAT KRNA", "MAT KARNA", "ABHI NAHI", "ABHI NHI", "NOT ACTIVE", "DONT ENTER",
-        "DON'T ENTER", "DO NOT ENTER", "NO ENTRY", "ENTRY MAT LENA", "WAIT FOR",
-        "WAIT", "ROKO", "CONFIRMATION BAKI", "HOLD ON", "HOLD ENTRY"
-    ])
-
-    # 5. MISSED / NOT TAPPED / CANCELLED (Check first so cancellations are caught)
-    if any(k in t for k in [
-        "NOT TAPPED", "DIDNT TAP", "DIDN'T TAP", "LEVEL NOT TAPPED", "CANCEL SETUP",
-        "CANCEL ORDER", "CANCEL", "IGNORE THIS LEVEL", "SETUP CANCELLED", "MISSED THIS", "INVALIDATED"
-    ]):
-        return "MISSED_NOT_TAPPED"
-
-    # LEVEL TAPPED ALERT (User Rule: Level tapped is strictly an alert for users, NOT active yet!)
-    if any(k in t for k in [
-        "LEVEL TAPPED", "LEVEL TAPED", "ZONE TAPPED", "ZONE REACHED", "LEVEL REACHED"
-    ]) or (re.search(r"\b(tapped|taped)\b", t) and not any(k in t for k in ["NOT", "DIDNT", "CANCEL"])):
-        return "LEVEL_TAPPED"
-
-    # 1. SL HIT
-    if any(k in t for k in ["SL HIT", "STOP LOSS HIT", "SL TOUCHED", "HIT SL", "HIT OUR SL"]):
-        return "SL_HIT"
-
-    # 4. PARTIAL 1:1 (User Highlighted Focus)
-    if any(k in t for k in [
-        "1:1", "1;1", "1:1 DONE", "1;1 DON", "1:1 ACHIEVED", "1:1 BHI HO GAYA", "1:1 GIVEN",
-        "BOOK PARTIAL", "PARTIAL BOOK", "HALF BOOK", "SAFE TRADERS BOOK",
-        "SAFE TRADERS OUT", "BOOK 50%", "HALF PROFIT", "1:2 ALREADY GIVEN", "1:2 DONE", "1:2 BHI HO GAYA"
-    ]) or action in ["PARTIAL_CLOSE", "BOOK_PARTIAL"]:
-        return "PARTIAL_1_TO_1"
-
-    # 3. BREAK EVEN / RISK FREE
-    if any(k in t for k in [
-        "RISK FREE", "RISK FREE KRDO", "RISK FREE KARLO", "RISK FREE KR LENA", "RISK FREEE",
-        "SL TO COST", "SL TO ENTRY", "BREAKEVEN", "BREAK EVEN", "MOVE SL TO ENTRY", "COST PE SL"
-    ]) or action in ["MODIFY_SL"]:
-        return "BREAK_EVEN"
-
-    # 2. TP HIT / FULL PROFIT BOOKING
-    if any(k in t for k in [
-        "FULL TP", "ALL TP", "TP HIT", "TARGET HIT", "BOOK ALL YOUR PROFITS",
-        "BOOK ALL PROFITS", "BOOK FULL", "FINAL TP", "BOOK YOUR PROFITSS", "PIPS BOOKED", "POINTS BOOKED"
-    ]) or intent == "CLOSE_TRADE":
-        return "TP_HIT"
-
-    # 6. EARLY EXECUTION / ACTIVE (Only if NOT negated!)
-    if not is_negated and any(k in t for k in [
-        "ACTIVE", "RUNNING", "ACTIVE NOW", "TRIGGERED EARLY", "EXECUTED EARLY", "ENTER CMP", "ACTIVE TRADE"
-    ]):
-        return "EARLY_EXECUTION"
-
-    return None
+def parse_price(val: Any) -> float:
+    """Extracts first valid float from a string or number."""
+    if not val:
+        return 0.0
+    numbers = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', str(val).replace(",", ""))]
+    return numbers[0] if numbers else 0.0
 
 async def correlate_and_process_trade(
     message_id: int,
     interpretation: Dict[str, Any],
     raw_text: str,
+    channel_id: Optional[str] = None,
+    channel_title: Optional[str] = None,
     has_image: bool = False
 ) -> Dict[str, Any]:
     """
-    Correlates an incoming message to an existing active trade or spawns a new unique trade.
-    Enforces strict rules:
-      - 'LEVEL TAPPED' is an alert (status = LEVEL_TAPPED, is_active = 1), NOT an activation.
-      - Negations (e.g. 'active mat krna abhi') do NOT trigger active.
-      - Any follow-up lacking brand-new complete order parameters (new entry + new SL) strictly
-        links to the earlier trade on that asset/chat.
-      - A new Trade ID is created ONLY if the message explicitly contains a complete new setup
-        (both entry + SL) that differs from the active trade.
+    AI-Driven Trade Correlation & Execution Manager:
+    - 3-Way Intent Routing: NEW_TRADE, TRADE_UPDATE, OTHERS.
+    - NEW_TRADE:
+        * If is_active_now=True: Strictly validates SL/TP -> executes on XM MT5 -> marks EXECUTED.
+        * If is_active_now=False: Saves as PENDING in system, awaiting owner confirmation.
+    - TRADE_UPDATE:
+        * If update_type="ACTIVATE": Activates pending trade -> executes on XM MT5 with strict lots -> marks EXECUTED.
+        * If update_type="CANCEL": Cancels setup in system -> marks CANCELLED.
+        * If trade was already EXECUTED: Enforces hands-off policy (trade runs untouched on MT5).
+        * If trade is CANCELLED or > 2 hours old: Ignores update.
+    - OTHERS:
+        * Casual chatter, ignored.
     """
+    intent = interpretation.get("intent", "OTHERS")
     symbol = normalize_symbol(interpretation.get("symbol"), raw_text)
-    detected_outcome = detect_outcome_from_message(raw_text, interpretation, has_image)
 
-    t = (raw_text or "").upper()
-    is_negated = any(k in t for k in [
-        "MAT KRNA", "MAT KARNA", "ABHI NAHI", "ABHI NHI", "NOT ACTIVE", "DONT ENTER",
-        "DON'T ENTER", "DO NOT ENTER", "NO ENTRY", "ENTRY MAT LENA", "WAIT FOR",
-        "WAIT", "ROKO", "CONFIRMATION BAKI", "HOLD ON", "HOLD ENTRY"
-    ])
+    # -------------------------------------------------------------
+    # 1. NEW TRADE SETUP
+    # -------------------------------------------------------------
+    if intent == "NEW_TRADE":
+        action = (interpretation.get("action") or "BUY").upper()
+        if "BUY" not in action and "SELL" not in action:
+            action = "BUY"
 
-    intent = interpretation.get("intent", "CHATTER")
+        order_type = (interpretation.get("order_type") or "MARKET").upper()
+        entry_raw = interpretation.get("entry_price")
+        sl_raw = interpretation.get("sl")
+        tp_levels = interpretation.get("tp_levels") or []
+        is_active_now = bool(interpretation.get("is_active_now", False))
 
-    # If outcome matched, ensure intent reflects trade update
-    if detected_outcome and intent == "CHATTER":
-        interpretation["intent"] = "TRADE_UPDATE"
-        interpretation["is_trade"] = 1
+        # Parse numeric entry and SL safely (supports zones like 2640-2642)
+        entry_float = parse_entry_price(entry_raw)
+        sl_float = parse_price(sl_raw)
 
-    # Check whether the message explicitly contains a complete new order structure (new entry + new SL)
-    new_entry_raw = interpretation.get("entry_price")
-    new_sl_raw = interpretation.get("sl")
-    sl_str = str(new_sl_raw or "").upper().strip()
-    is_sl_be = any(k in sl_str for k in ["BREAKEVEN", "ENTRY", "COST", "OPEN", "NONE", "NULL"]) or not sl_str
-    
-    # Must have both a specific entry AND a non-breakeven protective SL to count as a brand-new setup
-    has_full_order = bool(
-        new_entry_raw and 
-        new_sl_raw and 
-        not is_sl_be and 
-        intent in ["NEW_TRADE", "PENDING_CONFIRMATION"]
-    )
+        trade_id = await generate_trade_id(symbol)
 
-    # 1. Look for existing open trades for this symbol
-    open_trades = await get_active_trades_for_symbol(symbol)
+        # Case A: Owner signaled immediate market entry / CMP
+        if is_active_now:
+            # Strictly validate mandatory SL and TP
+            is_valid, final_sl, final_tp, val_msg = xm_executor.validate_and_enforce_sl_tp(
+                symbol=symbol,
+                action=action,
+                entry=entry_float,
+                sl=sl_float,
+                tp_levels=tp_levels
+            )
 
-    # 2. If no open trade found for this symbol, look for ANY active trade globally in the system
-    if not open_trades:
-        async with get_db() as conn:
-            cursor = await conn.execute("SELECT * FROM trades WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
-            row = await cursor.fetchone()
-            if row:
-                open_trades = [dict(row)]
+            if not is_valid:
+                # Reject trade: strictly no execution without proper SL and TP
+                await log_event(
+                    "WARNING", "XM_SAFETY",
+                    f"Execution rejected for {trade_id}: {val_msg}",
+                    details=f"Symbol: {symbol}, Entry: {entry_float}, SL: {sl_raw}, TP: {tp_levels}"
+                )
+                tid = await create_trade({
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "action": action,
+                    "order_type": order_type,
+                    "entry_price": str(entry_float) if entry_float else entry_raw,
+                    "sl": str(sl_raw),
+                    "tp_levels": tp_levels,
+                    "status": "REJECTED_NO_SL_TP",
+                    "outcome": f"Rejected: {val_msg}",
+                    "initial_message_id": message_id,
+                    "channel_id": channel_id,
+                    "channel_title": channel_title,
+                    "pnl_notes": f"Safety Shield: {val_msg}"
+                })
+                await update_message_trade_id(message_id, trade_id)
+                return {"trade_id": trade_id, "action": "REJECTED", "reason": val_msg}
 
-    # 3. If STILL no active trade (e.g. earlier trade was marked closed, or message is a follow-up),
-    # look at the most recent trade referenced by earlier messages in the system
-    if not open_trades and (detected_outcome or not has_full_order):
-        async with get_db() as conn:
-            cursor = await conn.execute("""
-                SELECT trade_id FROM messages 
-                WHERE trade_id IS NOT NULL AND trade_id != '' 
-                ORDER BY id DESC LIMIT 1
-            """)
-            last_m = await cursor.fetchone()
-            if last_m:
-                last_trade = await get_trade_by_id(last_m["trade_id"])
-                if last_trade:
-                    open_trades = [last_trade]
+            # Execute trade on XM MT5 with strict lots (0.02 Gold, 0.04 BTC, 0.01 other)
+            xm_res = await xm_executor.execute_new_trade({
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "action": action,
+                "entry_price": entry_float,
+                "sl": final_sl,
+                "tp_levels": [final_tp]
+            })
 
-    # === SCENARIO A: Follow-Up Message / Message Lacking Complete Order (Entry + SL) ===
-    # User Strict Rule: Follow-up messages (LEVEL TAPED, ACTIVE, HOLD, RISK FREE, 1:1, etc.)
-    # MUST strictly anchor to the earlier/above message in the timeline and link to THAT trade ID!
-    if not has_full_order:
+            ticket = xm_res.get("ticket")
+            lots = xm_res.get("lots")
+            exec_price = xm_res.get("price") or entry_float
+
+            tid = await create_trade({
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "action": action,
+                "order_type": order_type,
+                "entry_price": str(exec_price),
+                "sl": str(final_sl),
+                "tp_levels": [str(final_tp)],
+                "status": "EXECUTED",
+                "outcome": "XM MT5: Running Hands-Off",
+                "initial_message_id": message_id,
+                "channel_id": channel_id,
+                "channel_title": channel_title,
+                "xm_ticket": ticket,
+                "xm_execution_price": exec_price,
+                "xm_lots": lots,
+                "xm_response": json.dumps(xm_res),
+                "pnl_notes": f"XM Ticket #{ticket} ({lots} lots) FILLED @ {exec_price} | Hands-Off"
+            })
+            await update_message_trade_id(message_id, trade_id)
+            return {"trade_id": trade_id, "action": "EXECUTED_ON_XM", "ticket": ticket, "lots": lots, "xm_response": xm_res}
+
+        # Case B: Pending setup (Waiting for Tap / Confirmation)
+        else:
+            tid = await create_trade({
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "action": action,
+                "order_type": order_type,
+                "entry_price": str(entry_float) if entry_float else entry_raw,
+                "sl": str(sl_raw),
+                "tp_levels": tp_levels,
+                "status": "PENDING",
+                "outcome": "Pending Setup (Awaiting Owner Confirmation)",
+                "initial_message_id": message_id,
+                "channel_id": channel_id,
+                "channel_title": channel_title,
+                "pnl_notes": "Setup recorded. Awaiting owner 'ACTIVE NOW' confirmation to execute."
+            })
+            await update_message_trade_id(message_id, trade_id)
+            await log_event(
+                "SIGNAL", "TRADE_LIFECYCLE",
+                f"Pending Trade {trade_id} detected on {symbol} @ {entry_raw}. Waiting for owner activation.",
+                details=f"SL: {sl_raw}, TP: {tp_levels}"
+            )
+            return {"trade_id": trade_id, "action": "PENDING_AWAITING_CONFIRMATION"}
+
+    # -------------------------------------------------------------
+    # 2. TRADE UPDATE (Follow-up regarding an existing trade)
+    # -------------------------------------------------------------
+    elif intent == "TRADE_UPDATE":
+        target_tid = interpretation.get("target_trade_id")
+        update_type = (interpretation.get("update_type") or "INFO").upper()
+
+        # Find target trade
         target_trade = None
+        if target_tid:
+            target_trade = await get_trade_by_id(target_tid)
 
-        # 1. Primary Rule: Check the trade_id of the immediate preceding message in the channel/timeline
-        preceding_trade_id = await get_preceding_message_trade_id(message_id, symbol)
-        if preceding_trade_id:
-            target_trade = await get_trade_by_id(preceding_trade_id)
+        if not target_trade:
+            # Fallback to most recent pending trade for this channel/symbol
+            pending_list = await get_channel_pending_trades(channel_id, channel_title)
+            if pending_list:
+                target_trade = pending_list[0]
+                target_tid = target_trade["trade_id"]
 
-        # 2. Fallback: If preceding message had no trade, use active trade for symbol
-        if not target_trade and open_trades:
-            target_trade = open_trades[0]
+        if not target_trade:
+            # Check most recent active trade
+            active_list = await get_channel_active_trades(channel_id, channel_title)
+            if active_list:
+                target_trade = active_list[0]
+                target_tid = target_trade["trade_id"]
 
-        if target_trade:
-            trade_id = target_trade["trade_id"]
+        if not target_trade:
+            # No existing trade found to update
+            return {"action": "NO_TARGET_TRADE", "reason": "No pending or active trade to update."}
 
-            # Outcome matched
-            if detected_outcome:
-                outcome_info = TRADE_OUTCOMES[detected_outcome]
-                notes = f"Owner update: '{raw_text[:60]}'. Status -> {outcome_info['title']}."
+        target_status = target_trade.get("status", "PENDING")
 
-                new_sl = None
-                if detected_outcome == "BREAK_EVEN":
-                    new_sl = target_trade.get("entry_price") or "BREAKEVEN"
-                    notes = f"Risk-Free update: Stop loss moved to Entry ({new_sl}). Trade secured."
-                    if xm_executor.auto_execution_enabled:
-                        try:
-                            e_num = float(re.sub(r'[^\d.]', '', str(target_trade.get("entry_price") or "0")))
-                            if e_num > 0:
-                                await xm_executor.execute_modify_sl_breakeven(trade_id, e_num)
-                        except Exception:
-                            pass
-                elif detected_outcome == "PARTIAL_1_TO_1":
-                    notes = f"1:1 target hit: 50% partial lots booked. SL dragged to Entry (Break Even) & TP extended to 1:2. ({raw_text[:40]})"
-                    if xm_executor.auto_execution_enabled:
-                        await xm_executor.execute_partial_exit_and_extend_1to2(trade_id)
-                elif detected_outcome == "LEVEL_TAPPED":
-                    notes = f"Level tapped alert: market reached pending zone. Traders alert; waiting for entry confirmation."
-                elif detected_outcome == "EARLY_EXECUTION":
-                    if target_trade.get("status") in ["PENDING", "LEVEL_TAPPED"]:
-                        notes = "Pending setup executed early after owner signaled 'ACTIVE'."
-                        if xm_executor.auto_execution_enabled:
-                            await xm_executor.execute_new_trade({
-                                "trade_id": trade_id,
-                                "symbol": target_trade.get("symbol"),
-                                "action": target_trade.get("action"),
-                                "order_type": "MARKET",
-                                "entry_price": target_trade.get("entry_price"),
-                                "sl": target_trade.get("sl"),
-                                "tp_levels": target_trade.get("tp_levels", [])
-                            })
-                    else:
-                        detected_outcome = "ACTIVE"
-                        notes = "Owner confirmed trade is active and running."
+        # RULE: If trade is CANCELLED, ignore new messages regarding it
+        if target_status == "CANCELLED":
+            await log_event("INFO", "TRADE_LIFECYCLE", f"Ignoring message for already cancelled trade {target_tid}.")
+            return {"trade_id": target_tid, "action": "IGNORED", "reason": "Trade is cancelled/expired."}
+
+        # RULE: 2-Hour Inactivity Expiration check
+        created_str = target_trade.get("created_at")
+        if created_str:
+            try:
+                # Parse created_at timestamp
+                trade_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+                age_seconds = (datetime.utcnow().timestamp() - trade_dt.timestamp())
+                if target_status == "PENDING" and age_seconds > 7200:
+                    # Expire trade
+                    await update_trade_outcome(
+                        trade_id=target_tid,
+                        new_status="CANCELLED",
+                        outcome="Auto-Cancelled (No update within 2 hours)",
+                        notes="Setup expired: 2 hours elapsed without activation.",
+                        message_id=message_id
+                    )
+                    await log_event("INFO", "TRADE_LIFECYCLE", f"Trade {target_tid} expired after 2 hours. Message ignored.")
+                    return {"trade_id": target_tid, "action": "IGNORED", "reason": "Trade expired after 2 hours."}
+            except Exception:
+                pass
+
+        # RULE: Hands-Off Policy for EXECUTED trades
+        # "once trade has been executed then we should not do anything from our side even if the owner say any other thing"
+        if target_status == "EXECUTED":
+            await update_message_trade_id(message_id, target_tid)
+            # Log event in trade timeline as commentary, but DO NOT touch XM position!
+            await log_event(
+                "INFO", "XM_HANDS_OFF",
+                f"Trade {target_tid} is already EXECUTED on XM MT5. Hands-off policy enforced: Position runs untouched.",
+                details=f"Owner Message: '{raw_text}'"
+            )
+            async with get_db() as conn:
+                await conn.execute("""
+                    INSERT INTO trade_events (trade_id, message_id, event_type, previous_status, new_status, notes)
+                    VALUES (?, ?, 'COMMENTARY', 'EXECUTED', 'EXECUTED', ?)
+                """, (target_tid, message_id, f"Owner follow-up: {raw_text} (Hands-off: MT5 position runs untouched)"))
+                await conn.commit()
+            return {
+                "trade_id": target_tid,
+                "action": "HANDS_OFF_RUNNING",
+                "message": "Position is running hands-off on XM MT5 until TP or SL."
+            }
+
+        # Handle PENDING trades
+        if target_status == "PENDING":
+            await update_message_trade_id(message_id, target_tid)
+
+            # Sub-case: Owner confirmed activation ("ACTIVE NOW", "ENTER CMP", "RUNNING")
+            if update_type == "ACTIVATE":
+                t_symbol = target_trade["symbol"]
+                t_action = target_trade["action"]
+                t_entry = parse_entry_price(target_trade.get("entry_price"))
+                t_sl = parse_price(target_trade.get("sl"))
+
+                tp_levels_raw = target_trade.get("tp_levels")
+                if isinstance(tp_levels_raw, str):
+                    try:
+                        t_tps = json.loads(tp_levels_raw)
+                    except Exception:
+                        t_tps = [tp_levels_raw]
+                elif isinstance(tp_levels_raw, list):
+                    t_tps = tp_levels_raw
+                else:
+                    t_tps = []
+
+                # If entry was zone or not set, use default market level
+                if t_entry <= 0:
+                    t_entry = 2642.0 if "XAU" in t_symbol or "GOLD" in t_symbol else 68500.0
+
+                # Validate proper SL and TP
+                is_valid, final_sl, final_tp, val_msg = xm_executor.validate_and_enforce_sl_tp(
+                    symbol=t_symbol,
+                    action=t_action,
+                    entry=t_entry,
+                    sl=t_sl,
+                    tp_levels=t_tps
+                )
+
+                if not is_valid:
+                    await log_event("WARNING", "XM_SAFETY", f"Cannot activate {target_tid} on XM: {val_msg}")
+                    return {"trade_id": target_tid, "action": "ACTIVATION_FAILED", "reason": val_msg}
+
+                # Submit to XM MT5
+                xm_res = await xm_executor.execute_new_trade({
+                    "trade_id": target_tid,
+                    "symbol": t_symbol,
+                    "action": t_action,
+                    "entry_price": t_entry,
+                    "sl": final_sl,
+                    "tp_levels": [final_tp]
+                })
+
+                ticket = xm_res.get("ticket")
+                lots = xm_res.get("lots")
+                exec_price = xm_res.get("price") or t_entry
 
                 await update_trade_outcome(
-                    trade_id=trade_id,
-                    new_status=detected_outcome,
-                    outcome=outcome_info["title"],
-                    notes=notes,
+                    trade_id=target_tid,
+                    new_status="EXECUTED",
+                    outcome="XM MT5: Running Hands-Off",
+                    notes=f"Owner confirmed activation ('{raw_text}'). Executed on XM MT5 (Ticket #{ticket}, {lots} lots @ {exec_price}).",
                     message_id=message_id,
-                    new_sl=new_sl
+                    new_sl=str(final_sl),
+                    xm_ticket=ticket,
+                    xm_execution_price=exec_price,
+                    xm_response=json.dumps(xm_res),
+                    xm_lots=lots
                 )
 
                 await log_event(
-                    "SIGNAL", "LIFECYCLE",
-                    f"Trade {trade_id} ({symbol}) status updated -> {outcome_info['title']}",
-                    details=notes
+                    "SIGNAL", "TRADE_ACTIVATION",
+                    f"SUCCESS: Trade {target_tid} ACTIVATED & FILLED on XM MT5 - Ticket #{ticket} ({lots} lots @ {exec_price}). Hands-off until TP/SL.",
+                    details=f"SL: {final_sl}, TP: {final_tp}"
                 )
+                return {"trade_id": target_tid, "action": "ACTIVATED_AND_EXECUTED", "ticket": ticket, "lots": lots, "xm_response": xm_res}
 
-                return {
-                    "action": "UPDATED_TRADE",
-                    "trade_id": trade_id,
-                    "status": detected_outcome,
-                    "outcome": outcome_info["title"],
-                    "badge_class": outcome_info["badge_class"]
-                }
-
-            # If message contains negation (e.g. "active mat krna abhi")
-            if is_negated:
-                notes = f"Owner advisory: '{raw_text}'. Hold position, do not activate yet."
-                await update_message_trade_id(message_id, trade_id)
-                await log_event(
-                    "INFO", "LIFECYCLE",
-                    f"Trade {trade_id} ({symbol}) advisory: {notes}",
-                    details=raw_text
+            # Sub-case: Owner cancelled / invalidated the setup
+            elif update_type == "CANCEL":
+                await update_trade_outcome(
+                    trade_id=target_tid,
+                    new_status="CANCELLED",
+                    outcome="Cancelled by Channel Owner",
+                    notes=f"Owner explicitly cancelled setup: '{raw_text}'",
+                    message_id=message_id
                 )
-                return {
-                    "action": "LINKED_TRADE",
-                    "trade_id": trade_id,
-                    "status": target_trade.get("status"),
-                    "outcome": target_trade.get("outcome"),
-                    "badge_class": TRADE_OUTCOMES.get(target_trade.get("status", "ACTIVE"), {}).get("badge_class", "badge-active")
-                }
+                await log_event("SIGNAL", "TRADE_CANCEL", f"Trade {target_tid} cancelled per owner message: '{raw_text}'")
+                return {"trade_id": target_tid, "action": "CANCELLED_BY_OWNER"}
 
-            # Generic update or pips chatter on existing trade
-            await update_message_trade_id(message_id, trade_id)
-            return {
-                "action": "LINKED_TRADE",
-                "trade_id": trade_id,
-                "status": target_trade.get("status"),
-                "outcome": target_trade.get("outcome"),
-                "badge_class": TRADE_OUTCOMES.get(target_trade.get("status", "ACTIVE"), {}).get("badge_class", "badge-active")
-            }
+            # Sub-case: Informational commentary while pending
+            else:
+                async with get_db() as conn:
+                    await conn.execute("""
+                        INSERT INTO trade_events (trade_id, message_id, event_type, previous_status, new_status, notes)
+                        VALUES (?, ?, 'COMMENTARY', 'PENDING', 'PENDING', ?)
+                    """, (target_tid, message_id, f"Channel update: {raw_text}"))
+                    await conn.commit()
+                return {"trade_id": target_tid, "action": "PENDING_COMMENTARY"}
 
-        # If no active or earlier trade exists and message has no entry+SL, it's chatter/noise
-        return {"action": "NO_TRADE", "trade_id": None}
-
-    # === SCENARIO B: Complete Order Structure Present (Entry + SL) ===
-    # Check if this setup is different from the currently open trade
-    if open_trades:
-        target_trade = open_trades[0]
-        trade_id = target_trade["trade_id"]
-        new_action = interpretation.get("action") or "BUY"
-        existing_action = target_trade.get("action")
-        existing_entry = str(target_trade.get("entry_price") or "")
-
-        # Check if same direction and price within 1.5% -> treat as same trade repost
-        is_different = (new_action != existing_action)
-        try:
-            if new_entry_raw and existing_entry:
-                ne_val = float(re.sub(r'[^\d.]', '', str(new_entry_raw)))
-                ee_val = float(re.sub(r'[^\d.]', '', existing_entry))
-                if abs(ne_val - ee_val) / ee_val > 0.015:
-                    is_different = True
-        except Exception:
-            pass
-
-        if not is_different:
-            # Same setup / repost of existing trade
-            await update_message_trade_id(message_id, trade_id)
-            return {
-                "action": "LINKED_TRADE",
-                "trade_id": trade_id,
-                "status": target_trade.get("status"),
-                "outcome": target_trade.get("outcome"),
-                "badge_class": TRADE_OUTCOMES.get(target_trade.get("status", "ACTIVE"), {}).get("badge_class", "badge-active")
-            }
-
-    # Brand new distinct trade setup! Create new unique Trade ID
-    symbol = symbol or "XAUUSD"
-    new_trade_id = await generate_trade_id(symbol)
-
-    # Determine initial status
-    is_pending = any(k in t for k in [
-        "BE READY", "CONFIRMATION", "WAIT FOR TAP", "LIMIT", "IF THIS LEVEL",
-        "WAIT FOR", "LEVEL TAP", "IF I CONFIRM"
-    ])
-
-    initial_status = "PENDING" if is_pending else "ACTIVE"
-    outcome_info = TRADE_OUTCOMES.get(initial_status, TRADE_OUTCOMES["ACTIVE"])
-
-    # XM Execution Trigger (Enforces proper SL & TP, 0.01 Gold, 0.04 BTC, $15 Risk rest)
-    xm_exec_note = ""
-    if initial_status == "ACTIVE" and xm_executor.auto_execution_enabled:
-        xm_res = await xm_executor.execute_new_trade({
-            "trade_id": new_trade_id,
-            "symbol": symbol,
-            "action": interpretation.get("action", "BUY"),
-            "order_type": interpretation.get("order_type", "MARKET"),
-            "entry_price": interpretation.get("entry_price"),
-            "sl": interpretation.get("sl"),
-            "tp_levels": interpretation.get("tp_levels", [])
-        })
-        if xm_res.get("success"):
-            xm_exec_note = f" | XM #{xm_res.get('ticket')} ({xm_res.get('lots')} lots, 1:1 TP: {xm_res.get('tp')})"
-        elif xm_res.get("status") == "BLOCKED_BY_SAFETY_SHIELD":
-            xm_exec_note = f" | [SAFETY SHIELD: {xm_res.get('message')}]"
-
-    await create_trade({
-        "trade_id": new_trade_id,
-        "symbol": symbol,
-        "action": interpretation.get("action", "BUY"),
-        "order_type": interpretation.get("order_type", "MARKET"),
-        "entry_price": interpretation.get("entry_price"),
-        "sl": interpretation.get("sl"),
-        "tp_levels": interpretation.get("tp_levels", []),
-        "risk_reward": interpretation.get("risk_reward"),
-        "status": initial_status,
-        "outcome": outcome_info["title"],
-        "initial_message_id": message_id,
-        "pnl_notes": f"Initial setup published. {outcome_info['title']}{xm_exec_note}"
-    })
-
-    await update_message_trade_id(message_id, new_trade_id)
-
-    await log_event(
-        "SIGNAL", "LIFECYCLE",
-        f"Trade {new_trade_id} created for {symbol} with status: {outcome_info['title']}",
-        details=f"Owner intent: {interpretation.get('reasoning')}"
-    )
-
-    return {
-        "action": "CREATED_TRADE",
-        "trade_id": new_trade_id,
-        "status": initial_status,
-        "outcome": outcome_info["title"],
-        "badge_class": outcome_info["badge_class"]
-    }
+    # -------------------------------------------------------------
+    # 3. OTHERS / CHATTER
+    # -------------------------------------------------------------
+    return {"action": "OTHERS_FILTERED"}

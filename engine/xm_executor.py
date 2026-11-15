@@ -2,6 +2,7 @@ import os
 import re
 import json
 import asyncio
+from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 from config import settings
 from database import log_event, get_db
@@ -238,12 +239,10 @@ class XMExecutionEngine:
         tp_levels: List[Any]
     ) -> Tuple[bool, Optional[float], Optional[float], str]:
         """
-        USER MANDATORY RULE:
-        1. "Alway place trade with proper SL and TP otherwise dont place trade."
-        2. "always take profit once the trade 1:1 RR ratio."
-        
-        Validates that both SL and TP are present and logically sound.
-        Calculates strict 1:1 TP if only SL is given.
+        USER MANDATORY RULES:
+        - Stop Loss (SL) and Take Profit (TP) are STRICTLY MANDATORY.
+        - NEVER execute trades without both valid SL and TP.
+        - Verify SL and TP are on the proper sides of the Entry price.
         """
         is_buy = "BUY" in action.upper() or "LONG" in action.upper()
 
@@ -253,20 +252,7 @@ class XMExecutionEngine:
         if sl is None or sl <= 0:
             return False, None, None, "REJECTED: Missing Stop Loss (SL). Proper SL is strictly mandatory."
 
-        # Verify SL is on correct side of Entry
-        if is_buy and sl >= entry:
-            return False, None, None, f"REJECTED: Invalid SL ({sl}) for BUY order (must be below entry {entry})."
-        if not is_buy and sl <= entry:
-            return False, None, None, f"REJECTED: Invalid SL ({sl}) for SELL order (must be above entry {entry})."
-
-        risk_distance = abs(entry - sl)
-        if risk_distance <= 0:
-            return False, None, None, "REJECTED: SL distance is zero."
-
-        # Enforce 1:1 Take Profit target
-        tp_1to1 = round(entry + risk_distance, 2) if is_buy else round(entry - risk_distance, 2)
-        
-        # Check if signal has existing TP
+        # Extract TP
         extracted_tp = None
         if tp_levels and len(tp_levels) > 0:
             try:
@@ -276,62 +262,117 @@ class XMExecutionEngine:
             except Exception:
                 pass
 
-        # Use 1:1 TP as mandatory target per user instruction
-        final_tp = tp_1to1 if extracted_tp is None else extracted_tp
-        
-        # Verify TP is on correct side of Entry
-        if is_buy and final_tp <= entry:
-            final_tp = tp_1to1
-        elif not is_buy and final_tp >= entry:
-            final_tp = tp_1to1
+        if extracted_tp is None:
+            return False, None, None, "REJECTED: Missing Take Profit (TP). Proper TP is strictly mandatory."
 
-        return True, sl, final_tp, "VALID"
+        # Verify SL is on correct side of Entry
+        if is_buy and sl >= entry:
+            return False, None, None, f"REJECTED: Invalid SL ({sl}) for BUY order (must be below entry {entry})."
+        if not is_buy and sl <= entry:
+            return False, None, None, f"REJECTED: Invalid SL ({sl}) for SELL order (must be above entry {entry})."
+
+        # Verify TP is on correct side of Entry
+        if is_buy and extracted_tp <= entry:
+            return False, None, None, f"REJECTED: Invalid TP ({extracted_tp}) for BUY order (must be above entry {entry})."
+        if not is_buy and extracted_tp >= entry:
+            return False, None, None, f"REJECTED: Invalid TP ({extracted_tp}) for SELL order (must be below entry {entry})."
+
+        return True, sl, extracted_tp, "VALID"
 
     def calculate_lot_size(
         self,
         symbol: str,
-        entry: float,
-        sl: float
+        entry: float = 0.0,
+        sl: float = 0.0
     ) -> float:
         """
         USER STRICT LOT RULES:
-        1. Gold (XAUUSD / GOLD): ALWAYS 0.01 lots.
+        1. Gold (XAUUSD / GOLD): ALWAYS 0.02 lots.
         2. Bitcoin (BTCUSD / BTCUSDT): ALWAYS 0.04 lots.
-        3. Other assets: Max $15 USD risk amount at Stop Loss.
+        3. Other pairs: ALWAYS 0.01 lots.
         """
-        s_upper = symbol.upper()
+        s_upper = (symbol or "").upper()
         if "GOLD" in s_upper or "XAU" in s_upper:
-            return self.GOLD_LOTS
-        
+            return 0.02
         if "BTC" in s_upper or "BITCOIN" in s_upper:
-            return self.BTC_LOTS
+            return 0.04
+        return 0.01
 
-        # Other assets: calculate lot size so max loss is $15 USD
-        risk_distance = abs(entry - sl)
-        if risk_distance <= 0:
-            return 0.01
-
-        contract_size = 100000.0 # Standard forex lot contract size
-        if self.is_connected and MT5_AVAILABLE:
+    async def get_open_positions(self) -> List[Dict[str, Any]]:
+        """
+        Returns active running positions from XM MT5 terminal or from tracked executed trades.
+        """
+        if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
+            def _fetch_live():
+                positions = mt5.positions_get()
+                if positions is None:
+                    return []
+                out = []
+                for p in positions:
+                    out.append({
+                        "ticket": p.ticket,
+                        "symbol": p.symbol,
+                        "type": "BUY" if p.type == mt5.ORDER_TYPE_BUY else "SELL",
+                        "volume": round(p.volume, 2),
+                        "price_open": round(p.price_open, 4),
+                        "price_current": round(p.price_current, 4),
+                        "sl": round(p.sl, 4) if p.sl else 0.0,
+                        "tp": round(p.tp, 4) if p.tp else 0.0,
+                        "profit": round(p.profit, 2),
+                        "magic": p.magic,
+                        "comment": p.comment,
+                        "time": datetime.fromtimestamp(p.time).strftime("%H:%M:%S") if hasattr(p, 'time') else ""
+                    })
+                return out
             try:
-                info = mt5.symbol_info(symbol)
-                if info:
-                    contract_size = float(info.trade_contract_size or 100000.0)
-            except Exception:
-                pass
+                return await asyncio.wait_for(asyncio.to_thread(_fetch_live), timeout=3.0)
+            except Exception as e:
+                print(f"[FETCH POSITIONS MT5 ERROR] {e}")
 
-        # Risk ($) = risk_distance * contract_size * lots
-        # lots = Max_Risk / (risk_distance * contract_size)
-        risk_per_1_lot = risk_distance * contract_size
-        calculated_lots = self.MAX_RISK_USD / risk_per_1_lot if risk_per_1_lot > 0 else 0.02
+        # In mock / demo mode, pull all EXECUTED active trades from database
+        positions = []
+        try:
+            async with get_db() as conn:
+                cursor = await conn.execute("""
+                    SELECT trade_id, symbol, action, entry_price, sl, tp_levels,
+                           xm_ticket, xm_execution_price, xm_lots, created_at
+                    FROM trades
+                    WHERE status = 'EXECUTED' AND is_active = 1
+                    ORDER BY id DESC
+                """)
+                rows = await cursor.fetchall()
+                import random
+                for r in rows:
+                    entry = float(r["xm_execution_price"] or r["entry_price"] or 0.0)
+                    sl_val = float(r["sl"] or 0.0)
+                    tp_list = json.loads(r["tp_levels"]) if r["tp_levels"] else []
+                    tp_val = float(tp_list[0]) if tp_list else 0.0
+                    lots = float(r["xm_lots"] or 0.02)
+                    action = (r["action"] or "BUY").upper()
+                    
+                    # Generate realistic simulated floating profit
+                    rnd_drift = random.uniform(-0.001, 0.003)
+                    curr_price = round(entry * (1.0 + rnd_drift), 2)
+                    direction = 1 if "BUY" in action else -1
+                    profit = round((curr_price - entry) * direction * lots * 100, 2)
 
-        # Normalize to 2 decimal places in even steps of 0.02 (min 0.02)
-        # so that 50% (half lots) can always be exited cleanly at 1:1
-        raw_lots = max(0.02, round(calculated_lots, 2))
-        normalized_lots = round(round(raw_lots / 0.02) * 0.02, 2)
-        if normalized_lots < 0.02:
-            normalized_lots = 0.02
-        return normalized_lots
+                    positions.append({
+                        "ticket": r["xm_ticket"] or 72481902,
+                        "trade_id": r["trade_id"],
+                        "symbol": r["symbol"],
+                        "type": "BUY" if "BUY" in action else "SELL",
+                        "volume": lots,
+                        "price_open": entry,
+                        "price_current": curr_price,
+                        "sl": sl_val,
+                        "tp": tp_val,
+                        "profit": profit,
+                        "comment": f"AlphaSignal {r['trade_id']}",
+                        "time": str(r["created_at"])[11:19] if r["created_at"] else ""
+                    })
+        except Exception as e:
+            print(f"[FETCH MOCK POSITIONS ERROR] {e}")
+        return positions
 
     async def execute_new_trade(self, trade_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -343,16 +384,18 @@ class XMExecutionEngine:
         action_raw = trade_data.get("action") or "BUY"
         is_buy = "BUY" in action_raw.upper() or "LONG" in action_raw.upper()
 
-        # Parse prices
-        try:
-            entry = float(re.sub(r'[^\d.]', '', str(trade_data.get("entry_price") or "0")))
-        except Exception:
-            entry = 0.0
+        # Parse prices safely (handles zones like 2640-2642)
+        entry_raw_str = str(trade_data.get("entry_price") or "0").strip().replace(",", "")
+        entry_nums = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', entry_raw_str)]
+        if len(entry_nums) >= 2 and any(sep in entry_raw_str for sep in ["-", "/", "TO", "to"]):
+            entry = round((entry_nums[0] + entry_nums[1]) / 2.0, 2)
+        elif len(entry_nums) >= 1:
+            entry = entry_nums[0]
+        else:
+            entry = 2642.0 if "XAU" in xm_symbol or "GOLD" in xm_symbol else 68500.0
 
-        try:
-            sl_val = float(re.sub(r'[^\d.]', '', str(trade_data.get("sl") or "0")))
-        except Exception:
-            sl_val = None
+        sl_nums = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', str(trade_data.get("sl") or "0").replace(",", ""))]
+        sl_val = sl_nums[0] if sl_nums else None
 
         tp_levels = trade_data.get("tp_levels") or []
 
@@ -703,12 +746,20 @@ class XMExecutionEngine:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (trade_id, ticket, symbol, order_type, lots, entry_price, sl, tp, status))
 
-                # Update trades master table
+                # Update trades master table with XM Execution receipt
                 await conn.execute("""
                     UPDATE trades 
-                    SET pnl_notes = pnl_notes || ' | XM Ticket #' || ?
+                    SET status = 'EXECUTED',
+                        is_active = 1,
+                        outcome = 'XM MT5: Running Hands-Off',
+                        xm_ticket = ?,
+                        xm_execution_price = ?,
+                        xm_lots = ?,
+                        xm_response = ?,
+                        pnl_notes = 'XM Ticket #' || ? || ' (' || ? || ' lots) FILLED @ ' || ?,
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE trade_id = ?
-                """, (ticket, trade_id))
+                """, (ticket, entry_price, lots, f"XM Ticket #{ticket} ({lots} lots) FILLED @ {entry_price} | SL: {sl} | TP: {tp}", ticket, lots, entry_price, trade_id))
 
                 await conn.commit()
         except Exception as e:
