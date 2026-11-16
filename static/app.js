@@ -357,6 +357,16 @@ function connectWebSocket() {
   ws.onopen = () => {
     updateWsStatus(true, "Live: Connected");
     appendLog("INFO", "SYSTEM", "Real-time WebSocket stream connected.");
+
+    // Periodic Heartbeat to prevent ngrok / cloudflare / reverse proxy idle socket timeout
+    if (window._wsHeartbeat) clearInterval(window._wsHeartbeat);
+    window._wsHeartbeat = setInterval(() => {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send("ping");
+        }
+      } catch (e) {}
+    }, 25000);
   };
 
   ws.onmessage = (event) => {
@@ -380,11 +390,13 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    if (window._wsHeartbeat) clearInterval(window._wsHeartbeat);
     updateWsStatus(false, "Live: Reconnecting...");
     setTimeout(connectWebSocket, 3000);
   };
 
   ws.onerror = (err) => {
+    if (window._wsHeartbeat) clearInterval(window._wsHeartbeat);
     console.warn("WS error:", err);
     updateWsStatus(false, "Live: Offline");
   };

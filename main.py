@@ -21,7 +21,7 @@ from auth import (
     set_auth_cookie, clear_auth_cookie
 )
 from database import (
-    init_db, get_messages, get_stats, get_logs,
+    init_db, get_db, get_messages, get_stats, get_logs,
     get_all_settings, set_setting, set_settings_bulk, log_event, clear_all_data,
     save_message, save_interpretation,
     get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome,
@@ -104,6 +104,38 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             await log_event("WARN", "TELEGRAM", f"Auto-start of Telegram listener failed: {e}")
 
+    # Auto-start Telethon Client listener if alpha_session exists on disk and bot is not active
+    session_file = settings.BASE_DIR / "alpha_session.session"
+    if session_file.exists() and not listener_manager.is_running:
+        try:
+            # Check user_settings for saved channels
+            saved_channels = None
+            async with get_db() as conn:
+                cursor = await conn.execute(
+                    "SELECT value FROM user_settings WHERE key = 'TELEGRAM_SELECTED_CHANNELS' ORDER BY rowid DESC LIMIT 1"
+                )
+                row = await cursor.fetchone()
+                if row and row["value"]:
+                    try:
+                        saved_channels = decrypt_credential(row["value"])
+                    except Exception:
+                        saved_channels = row["value"]
+
+            if not saved_channels:
+                saved_channels = stored_settings.get("TELEGRAM_SELECTED_CHANNELS") or stored_settings.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
+
+            tg_api_id = stored_settings.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
+            tg_api_hash = stored_settings.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+
+            asyncio.create_task(listener_manager.start_client_listener(
+                target_channel=saved_channels,
+                api_id=int(tg_api_id) if tg_api_id else None,
+                api_hash=tg_api_hash
+            ))
+            await log_event("INFO", "TELEGRAM", "Auto-started Telethon Client listener on server startup.")
+        except Exception as e:
+            await log_event("WARN", "TELEGRAM", f"Auto-start of Telethon Client listener failed: {e}")
+
     # Auto-initialize XM MT5 connection from stored settings
     xm_login = stored_settings.get("XM_MT5_LOGIN") or settings.XM_MT5_LOGIN
     xm_server = stored_settings.get("XM_MT5_SERVER") or settings.XM_MT5_SERVER
@@ -136,12 +168,60 @@ async def lifespan(app: FastAPI):
             except Exception as ex:
                 print(f"[EXPIRATION WORKER ERROR] {ex}")
 
+    # Background worker: 24/7 Telegram Listener Watchdog & Auto-Reconnector
+    async def _listener_watchdog():
+        await asyncio.sleep(8)
+        while True:
+            try:
+                await asyncio.sleep(35)
+                session_file = settings.BASE_DIR / "alpha_session.session"
+                if not listener_manager.is_running and session_file.exists():
+                    cur_settings = await get_all_settings()
+                    saved_channels = None
+                    async with get_db() as conn:
+                        cursor = await conn.execute(
+                            "SELECT value FROM user_settings WHERE key = 'TELEGRAM_SELECTED_CHANNELS' ORDER BY rowid DESC LIMIT 1"
+                        )
+                        row = await cursor.fetchone()
+                        if row and row["value"]:
+                            try:
+                                saved_channels = decrypt_credential(row["value"])
+                            except Exception:
+                                saved_channels = row["value"]
+                    if not saved_channels:
+                        saved_channels = cur_settings.get("TELEGRAM_SELECTED_CHANNELS") or cur_settings.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
+
+                    aid = cur_settings.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
+                    ahash = cur_settings.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+                    print("[WATCHDOG] Telegram listener is idle. Auto-starting 24/7 background listener...")
+                    await listener_manager.start_client_listener(
+                        target_channel=saved_channels,
+                        api_id=int(aid) if aid else None,
+                        api_hash=ahash
+                    )
+                    await ws_manager.broadcast({
+                        "type": "SYSTEM_STATUS",
+                        "data": {
+                            "listener_running": True,
+                            "listener_mode": listener_manager.active_mode
+                        }
+                    })
+                elif listener_manager.client and not listener_manager.client.is_connected():
+                    print("[WATCHDOG] Telethon socket disconnected. Reconnecting MTProto...")
+                    await listener_manager.client.connect()
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                print(f"[LISTENER WATCHDOG WARNING] {ex}")
+
     exp_task = asyncio.create_task(_expiration_worker())
+    listener_watchdog_task = asyncio.create_task(_listener_watchdog())
 
     yield
 
     # Shutdown
     exp_task.cancel()
+    listener_watchdog_task.cancel()
     if listener_manager.is_running:
         await listener_manager.stop_listener()
     await log_event("INFO", "SYSTEM", "AlphaSignal AI server shutting down.")
@@ -196,6 +276,16 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 # --- API Endpoints ---
+
+@app.get("/api/ping")
+async def ping_endpoint():
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "listener_running": listener_manager.is_running,
+        "listener_mode": listener_manager.active_mode,
+        "xm_connected": getattr(xm_executor, "connected", False)
+    }
 
 @app.get("/api/status")
 async def get_system_status():
