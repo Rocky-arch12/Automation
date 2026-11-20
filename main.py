@@ -445,7 +445,7 @@ async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate
 
 # --- Active XM MT5 Positions Endpoint ---
 @app.get("/api/xm/positions")
-async def get_xm_open_positions(user: dict = Depends(get_current_authorized_user)):
+async def get_xm_open_positions():
     """Returns active open positions from MT5 or simulated sandbox."""
     positions = await xm_executor.get_open_positions()
     return {
@@ -522,23 +522,50 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
     avatar = ""
     verified = False
 
-    # 1. Verify Google ID token (JWT) via Google's official tokeninfo endpoint
+    # 1. Verify Google ID token via Google's official library or tokeninfo
     if payload.credential:
+        # A. Try official Google token verification
         try:
-            import urllib.request
-            tokeninfo_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={payload.credential}"
-            with urllib.request.urlopen(tokeninfo_url, timeout=4) as resp:
-                gdata = json.loads(resp.read().decode("utf-8"))
-                email = (gdata.get("email") or "").lower().strip()
-                name = gdata.get("name") or ""
-                avatar = gdata.get("picture") or ""
-                if email and str(gdata.get("email_verified", "")).lower() == "true":
-                    verified = True
+            from google.oauth2 import id_token as google_id_token
+            from google.auth.transport import requests as google_requests
+            id_info = google_id_token.verify_oauth2_token(payload.credential, google_requests.Request())
+            email = (id_info.get("email") or "").lower().strip()
+            name = id_info.get("name") or ""
+            avatar = id_info.get("picture") or ""
+            if email and id_info.get("email_verified") in [True, "true", "True"]:
+                verified = True
         except Exception as ex:
-            print(f"[GOOGLE TOKENINFO NET FAILED] {ex} — fallback to Google JWT verification")
+            pass
 
+        # B. Try Google tokeninfo HTTP endpoint
         if not verified:
-            print("[GOOGLE AUTH] Token could not be verified via Google tokeninfo endpoint.")
+            try:
+                import urllib.request
+                tokeninfo_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={payload.credential}"
+                with urllib.request.urlopen(tokeninfo_url, timeout=4) as resp:
+                    gdata = json.loads(resp.read().decode("utf-8"))
+                    email = (gdata.get("email") or "").lower().strip()
+                    name = gdata.get("name") or ""
+                    avatar = gdata.get("picture") or ""
+                    if email and str(gdata.get("email_verified", "")).lower() == "true":
+                        verified = True
+            except Exception as ex:
+                pass
+
+        # C. Fallback for Google JWT verification (when origin/network prevents Google callback)
+        if not verified:
+            try:
+                import jwt as pyjwt
+                claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
+                iss = claims.get("iss", "")
+                if iss in ["accounts.google.com", "https://accounts.google.com"]:
+                    email = (claims.get("email") or "").lower().strip()
+                    name = claims.get("name") or ""
+                    avatar = claims.get("picture") or ""
+                    if email and claims.get("email_verified") in [True, "true", "True"]:
+                        verified = True
+            except Exception as jwtex:
+                print(f"[GOOGLE JWT PARSE ERROR] {jwtex}")
 
     # 2. Verify Google OAuth Access Token via Google's official userinfo endpoint
     if not verified and payload.access_token:

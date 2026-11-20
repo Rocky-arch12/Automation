@@ -378,6 +378,7 @@ class TelegramListenerManager:
         if not aid or not ahash:
             raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be configured in Settings or .env")
 
+        session_file = "alpha_session"
         client = TelegramClient(session_file, aid, ahash)
         await client.connect()
 
