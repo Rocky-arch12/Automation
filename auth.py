@@ -140,21 +140,8 @@ def is_email_authorized(email: str) -> bool:
     return email.lower().strip() in ALLOWED_GOOGLE_EMAILS
 
 async def get_current_user_optional(request: Request, authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
-    """Dependency: returns the authenticated user from HttpOnly Cookie, Bearer header, or Ngrok Edge OAuth."""
-    # 1. Check if request authenticated via Ngrok Google OAuth at the edge
-    if request:
-        ngrok_email = request.headers.get("ngrok-auth-user-email")
-        if ngrok_email:
-            clean_email = ngrok_email.lower().strip()
-            if is_email_authorized(clean_email):
-                return {
-                    "id": f"user_{hashlib.md5(clean_email.encode()).hexdigest()[:8]}",
-                    "email": clean_email,
-                    "name": request.headers.get("ngrok-auth-user-name", clean_email.split("@")[0]),
-                    "provider": "google-edge"
-                }
-
-    # 2. Check HttpOnly cookie or Authorization Bearer header
+    """Dependency: returns the authenticated user from HttpOnly Cookie or Bearer header."""
+    # Check HttpOnly cookie or Authorization Bearer header
     token = request.cookies.get("access_token") if request else None
     if not token and authorization:
         token = authorization

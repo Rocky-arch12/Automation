@@ -1,6 +1,8 @@
 import os
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -39,8 +41,8 @@ class Settings:
     XM_AUTO_EXECUTION: bool = os.getenv("XM_AUTO_EXECUTION", "true").lower() in ["true", "1", "yes"]
 
     # Security, Encryption & Multi-Tenant Auth
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "alphasignal-quantum-jwt-secret-key-2026-super-secure")
-    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "Dn5fuVgK6PtezCe9lGowX526ZsLmE88iXNwEcRfk04Y=")
+    JWT_SECRET: str = os.getenv("JWT_SECRET") or secrets.token_hex(32)
+    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY") or Fernet.generate_key().decode()
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
 
     # System Status flags

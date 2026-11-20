@@ -429,24 +429,25 @@ async def correlate_and_process_trade(
 
         target_status = target_trade.get("status", "PENDING")
 
-        # Hands-off policy for executed positions: Position runs untouched
+        # Hands-off policy for executed positions: Once executed on MT5, Telegram messages are strictly commentary
+        # ONLY our system's 5s live price polling and manual UI controls govern the MT5 trade.
         if target_status == "EXECUTED":
             await update_message_trade_id(message_id, target_tid)
             await log_event(
                 "INFO", "XM_HANDS_OFF",
-                f"Trade {target_tid} is already EXECUTED on XM MT5. Hands-off policy enforced: Position runs untouched.",
+                f"Trade {target_tid} is already EXECUTED on XM MT5. Hands-off policy enforced: Position runs untouched by Telegram commentary.",
                 details=f"Owner Message: '{raw_text}'"
             )
             async with get_db() as conn:
                 await conn.execute("""
                     INSERT INTO trade_events (trade_id, message_id, event_type, previous_status, new_status, notes)
                     VALUES (?, ?, 'COMMENTARY', 'EXECUTED', 'EXECUTED', ?)
-                """, (target_tid, message_id, f"Owner follow-up: {raw_text} (Hands-off: MT5 position runs untouched)"))
+                """, (target_tid, message_id, f"Owner follow-up: {raw_text} (Hands-off: MT5 position governed strictly by system 5s polling & UI)"))
                 await conn.commit()
             return {
                 "trade_id": target_tid,
                 "action": "HANDS_OFF_RUNNING",
-                "message": "Position is running hands-off on XM MT5 until TP or SL."
+                "message": "Position is running hands-off on XM MT5 until TP or SL. Telegram message recorded as commentary."
             }
 
         # Handle pending trade updates

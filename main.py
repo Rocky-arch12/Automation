@@ -214,14 +214,33 @@ async def lifespan(app: FastAPI):
             except Exception as ex:
                 print(f"[LISTENER WATCHDOG WARNING] {ex}")
 
+    # Background worker: 5-Second 1:1 Auto-Management (Book 50% lots, drag SL to CTC/Entry)
+    async def _xm_1to1_worker():
+        while True:
+            try:
+                await asyncio.sleep(5)
+                if xm_executor.is_connected:
+                    managed = await xm_executor.check_and_manage_1to1_positions()
+                    if managed:
+                        await ws_manager.broadcast({
+                            "type": "XM_POSITIONS_UPDATE",
+                            "data": managed
+                        })
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                print(f"[1:1 MONITOR EXCEPTION] {ex}")
+
     exp_task = asyncio.create_task(_expiration_worker())
     listener_watchdog_task = asyncio.create_task(_listener_watchdog())
+    xm_1to1_task = asyncio.create_task(_xm_1to1_worker())
 
     yield
 
     # Shutdown
     exp_task.cancel()
     listener_watchdog_task.cancel()
+    xm_1to1_task.cancel()
     if listener_manager.is_running:
         await listener_manager.stop_listener()
     await log_event("INFO", "SYSTEM", "AlphaSignal AI server shutting down.")
@@ -344,7 +363,8 @@ async def simulate_incoming_message(
     text: str = Form(""),
     sender: str = Form("Channel Owner"),
     channel_title: str = Form("VIP Signals [Test]"),
-    image: Optional[UploadFile] = File(None)
+    image: Optional[UploadFile] = File(None),
+    user: dict = Depends(get_current_authorized_user)
 ):
     media_type = "text"
     media_path = None
@@ -395,7 +415,7 @@ class TradeStatusUpdate(BaseModel):
     new_sl: Optional[str] = None
 
 @app.post("/api/trades/{trade_id}/status")
-async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate):
+async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate, user: dict = Depends(get_current_authorized_user)):
     outcome_info = TRADE_OUTCOMES.get(payload.status)
     if not outcome_info:
         raise HTTPException(status_code=400, detail=f"Invalid status: {payload.status}. Must be one of {list(TRADE_OUTCOMES.keys())}")
@@ -425,7 +445,7 @@ async def update_trade_status_endpoint(trade_id: str, payload: TradeStatusUpdate
 
 # --- Active XM MT5 Positions Endpoint ---
 @app.get("/api/xm/positions")
-async def get_xm_open_positions():
+async def get_xm_open_positions(user: dict = Depends(get_current_authorized_user)):
     """Returns active open positions from MT5 or simulated sandbox."""
     positions = await xm_executor.get_open_positions()
     return {
@@ -435,6 +455,22 @@ async def get_xm_open_positions():
         "account": xm_executor.account_info,
         "mode": "LIVE_MT5" if (xm_executor.is_connected and not xm_executor.is_mock_mode) else "DEMO_SANDBOX"
     }
+
+class ClosePositionRequest(BaseModel):
+    ticket: int
+    lots: Optional[float] = None
+
+@app.post("/api/xm/close")
+async def close_xm_position(payload: ClosePositionRequest, user: dict = Depends(get_current_authorized_user)):
+    """Manually closes a position (or partial lots) on XM MT5 from the UI."""
+    res = await xm_executor.close_position(ticket=payload.ticket, lots=payload.lots)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Failed to close position on XM MT5"))
+    await ws_manager.broadcast({
+        "type": "POSITION_CLOSED",
+        "data": res
+    })
+    return res
 
 # --- Database Slate Reset Endpoint (Clean start) ---
 @app.post("/api/reset-data")
@@ -501,20 +537,8 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
         except Exception as ex:
             print(f"[GOOGLE TOKENINFO NET FAILED] {ex} — fallback to Google JWT verification")
 
-        # Fallback to direct Google JWT verification (when local network blocks outbound urllib)
         if not verified:
-            try:
-                import jwt as pyjwt
-                claims = pyjwt.decode(payload.credential, options={"verify_signature": False})
-                iss = claims.get("iss", "")
-                if iss in ["accounts.google.com", "https://accounts.google.com"]:
-                    email = (claims.get("email") or "").lower().strip()
-                    name = claims.get("name") or ""
-                    avatar = claims.get("picture") or ""
-                    if email and claims.get("email_verified") in [True, "true", "True"]:
-                        verified = True
-            except Exception as jwtex:
-                print(f"[GOOGLE JWT PARSE ERROR] {jwtex}")
+            print("[GOOGLE AUTH] Token could not be verified via Google tokeninfo endpoint.")
 
     # 2. Verify Google OAuth Access Token via Google's official userinfo endpoint
     if not verified and payload.access_token:
@@ -582,8 +606,7 @@ async def logout_user(response: Response):
 async def get_auth_config():
     """Returns public auth configuration loaded from server environment (.env)."""
     return {
-        "google_client_id": settings.GOOGLE_CLIENT_ID or "",
-        "allowed_emails": list(ALLOWED_GOOGLE_EMAILS)
+        "google_client_id": settings.GOOGLE_CLIENT_ID or ""
     }
 
 @app.get("/api/auth/me")
@@ -781,7 +804,7 @@ async def update_xm_config_endpoint(payload: XMConfigUpdate, user: dict = Depend
     return {"status": "updated", "account": xm_executor.get_account_status(), "init_result": init_res}
 
 @app.post("/api/xm/toggle")
-async def toggle_xm_auto_execution(enabled: bool = Query(...)):
+async def toggle_xm_auto_execution(enabled: bool = Query(...), user: dict = Depends(get_current_authorized_user)):
     xm_executor.auto_execution_enabled = enabled
     await set_setting("XM_AUTO_EXECUTION", "true" if enabled else "false")
     await log_event("INFO", "XM_MT5", f"XM Auto-Execution toggled to: {'ON' if enabled else 'OFF'}")

@@ -376,7 +376,7 @@ function connectWebSocket() {
         handleIncomingMessage(msg.data);
         loadTrades();
         loadXMPositions();
-      } else if (msg.type === "TRADE_UPDATED" || msg.type === "TRADES_EXPIRED" || msg.type === "DATA_RESET") {
+      } else if (msg.type === "TRADE_UPDATED" || msg.type === "TRADES_EXPIRED" || msg.type === "DATA_RESET" || msg.type === "POSITION_CLOSED" || msg.type === "XM_POSITIONS_UPDATE") {
         loadTrades();
         loadXMPositions();
         loadMessages();
@@ -1271,11 +1271,25 @@ async function loadXMPositions() {
                 </div>
               </div>
 
-              <div class="pos-footer">
+              <!-- Interactive Close & Lots Controls -->
+              <div class="pos-actions" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Lots:</span>
+                  <input type="number" id="close-lots-${p.ticket}" step="0.01" min="0.01" max="${p.volume}" value="${p.volume}" style="width: 64px; padding: 4px 6px; font-size: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 4px; color: #fff; text-align: center;" />
+                  <button type="button" class="btn btn-secondary btn-xs" style="font-size: 10px; padding: 3px 6px;" onclick="setCloseLotsPreset(${p.ticket}, ${(p.volume / 2.0).toFixed(2)})">50%</button>
+                  <button type="button" class="btn btn-secondary btn-xs" style="font-size: 10px; padding: 3px 6px;" onclick="setCloseLotsPreset(${p.ticket}, ${p.volume})">100%</button>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" id="btn-close-${p.ticket}" style="font-size: 11px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px;" onclick="closeXMPosition(${p.ticket})">
+                  <i data-lucide="x-circle" style="width: 12px; height: 12px;"></i>
+                  Close Trade
+                </button>
+              </div>
+
+              <div class="pos-footer" style="margin-top: 8px;">
                 <span>Opened: ${p.time || 'Recently'}</span>
                 <span class="pos-handsoff">
-                  <i data-lucide="lock" style="width: 10px; height: 10px;"></i>
-                  Hands-Off: Position runs until TP/SL
+                  <i data-lucide="activity" style="width: 10px; height: 10px;"></i>
+                  Auto 1:1 Monitored
                 </span>
               </div>
             </div>
@@ -1286,6 +1300,58 @@ async function loadXMPositions() {
     initIcons();
   } catch (e) {
     console.error("Failed to load XM positions:", e);
+  }
+}
+
+function setCloseLotsPreset(ticket, lots) {
+  const input = document.getElementById(`close-lots-${ticket}`);
+  if (input) {
+    input.value = lots;
+  }
+}
+
+async function closeXMPosition(ticket) {
+  const input = document.getElementById(`close-lots-${ticket}`);
+  const lots = input ? parseFloat(input.value) : null;
+  const btn = document.getElementById(`btn-close-${ticket}`);
+
+  const volText = lots ? `${lots} lots` : "this position";
+  if (!confirm(`Are you sure you want to close ${volText} on MT5 Ticket #${ticket}?`)) {
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span style="display:inline-block; animation: spin 1s linear infinite;">⏳</span> Closing...`;
+  }
+
+  try {
+    const res = await fetch("/api/xm/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket: parseInt(ticket), lots: lots })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      alert("Failed to close position: " + (data.detail || data.error || "Unknown error"));
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="x-circle" style="width: 12px; height: 12px;"></i> Close Trade`;
+        initIcons();
+      }
+      return;
+    }
+
+    appendLog("SIGNAL", "XM_EXECUTION", `SUCCESS: Closed ${data.closed_lots} lots on #${ticket} (${data.status}).`);
+    await loadXMPositions();
+  } catch (err) {
+    console.error("Error closing position:", err);
+    alert("Network or server error while closing position: " + err.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="x-circle" style="width: 12px; height: 12px;"></i> Close Trade`;
+      initIcons();
+    }
   }
 }
 

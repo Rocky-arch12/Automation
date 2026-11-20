@@ -8,8 +8,9 @@ from telethon.errors import SessionPasswordNeededError
 
 load_dotenv()
 
-API_ID = int(os.getenv("TELEGRAM_API_ID", 21434478))
-API_HASH = os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693")
+_api_id_val = os.getenv("TELEGRAM_API_ID")
+API_ID = int(_api_id_val) if _api_id_val else None
+API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 PHONE = os.getenv("TELEGRAM_PHONE", "").strip()
 SESSION_NAME = "alpha_session"
 AUTH_FILE = "auth_state.json"

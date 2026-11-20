@@ -331,8 +331,11 @@ class TelegramListenerManager:
         """Fetches joined Telegram channels and groups so the user can select multiple sources."""
         from telethon import TelegramClient
 
-        aid = int(api_id or os.getenv("TELEGRAM_API_ID", 21434478) or 21434478)
-        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693"))
+        aid_val = api_id or os.getenv("TELEGRAM_API_ID")
+        aid = int(aid_val) if aid_val else None
+        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH") or "").strip()
+        if not aid or not ahash:
+            return []
 
         client = TelegramClient(session_name, aid, ahash)
         await client.connect()
@@ -369,9 +372,11 @@ class TelegramListenerManager:
         from telethon import TelegramClient, events
         from telethon.tl.types import MessageMediaPhoto
 
-        aid = int(api_id or os.getenv("TELEGRAM_API_ID", 21434478) or 21434478)
-        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH", "b98eb6065609c23fc1e7a88427f5e693"))
-        session_file = "alpha_session"
+        aid_val = api_id or os.getenv("TELEGRAM_API_ID")
+        aid = int(aid_val) if aid_val else None
+        ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH") or "").strip()
+        if not aid or not ahash:
+            raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be configured in Settings or .env")
 
         client = TelegramClient(session_file, aid, ahash)
         await client.connect()

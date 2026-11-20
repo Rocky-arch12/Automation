@@ -28,6 +28,7 @@ class XMExecutionEngine:
         self.GOLD_LOTS = 0.02       # Gold: ALWAYS 0.02 lots (exit 0.01 at 1:1)
         self.BTC_LOTS = 0.04        # Bitcoin: ALWAYS 0.04 lots (exit 0.02 at 1:1)
         self.MAX_RISK_USD = 15.0    # Other assets: Max $15 USD risk at Stop Loss
+        self._managed_1to1_tickets: set = set()
 
     async def initialize(self, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None, path: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -578,7 +579,7 @@ class XMExecutionEngine:
             target_pos = None
             if positions:
                 for p in positions:
-                    if trade_id in (p.comment or ""):
+                    if str(trade_id) in (p.comment or "") or str(p.ticket) == str(trade_id):
                         target_pos = p
                         break
                 if not target_pos:
@@ -629,7 +630,7 @@ class XMExecutionEngine:
             target_pos = None
             if positions:
                 for p in positions:
-                    if trade_id in (p.comment or ""):
+                    if str(trade_id) in (p.comment or "") or str(p.ticket) == str(trade_id):
                         target_pos = p
                         break
                 if not target_pos:
@@ -735,6 +736,165 @@ class XMExecutionEngine:
     async def execute_take_profit_1to1(self, trade_id: str) -> Dict[str, Any]:
         """Backward-compatible alias pointing to execute_partial_exit_and_extend_1to2."""
         return await self.execute_partial_exit_and_extend_1to2(trade_id)
+
+    async def close_position(self, ticket: int, lots: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Manually closes a position (or partial volume) on XM MT5 from the UI.
+        If lots is None or >= open volume, closes the entire position.
+        If lots < open volume, executes a partial close on MT5.
+        """
+        ticket_int = int(ticket)
+        if not self.is_connected or not MT5_AVAILABLE or self.is_mock_mode:
+            vol_str = f"{lots} lots" if lots else "full volume"
+            await log_event("SIGNAL", "XM_EXECUTION", f"[XM DEMO] Closed #{ticket_int} ({vol_str}) via UI.")
+            return {"success": True, "status": "DEMO_CLOSED", "ticket": ticket_int, "closed_lots": lots or 0.02, "remaining_lots": 0.0}
+
+        def _sync_close():
+            positions = mt5.positions_get(ticket=ticket_int)
+            if not positions:
+                all_pos = mt5.positions_get()
+                if all_pos:
+                    for p in all_pos:
+                        if p.ticket == ticket_int:
+                            positions = [p]
+                            break
+            if not positions:
+                return False, f"Position #{ticket_int} not found or already closed."
+
+            p = positions[0]
+            total_vol = round(float(p.volume), 2)
+            close_vol = round(float(lots), 2) if lots and float(lots) > 0 else total_vol
+            if close_vol > total_vol:
+                close_vol = total_vol
+
+            is_buy = (p.type == mt5.ORDER_TYPE_BUY)
+            close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+
+            sym_info = mt5.symbol_info(p.symbol)
+            tick = mt5.symbol_info_tick(p.symbol)
+            if not tick:
+                return False, f"Tick data unavailable for {p.symbol}"
+
+            price = tick.bid if is_buy else tick.ask
+            filling = mt5.ORDER_FILLING_IOC
+            if hasattr(sym_info, 'filling_mode'):
+                if sym_info.filling_mode == 1:
+                    filling = mt5.ORDER_FILLING_FOK
+                elif sym_info.filling_mode == 2:
+                    filling = mt5.ORDER_FILLING_IOC
+                elif sym_info.filling_mode == 4:
+                    filling = mt5.ORDER_FILLING_RETURN
+
+            close_req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "position": int(p.ticket),
+                "symbol": p.symbol,
+                "volume": float(close_vol),
+                "type": close_type,
+                "price": float(price),
+                "deviation": 50,
+                "magic": 998822,
+                "comment": f"Manual Close #{ticket_int}",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling,
+            }
+            res = mt5.order_send(close_req)
+            if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
+                err = res.comment if res else "Order send failed"
+                return False, f"MT5 rejected close on #{ticket_int}: {err}"
+
+            remaining = round(total_vol - close_vol, 2)
+            return True, {
+                "ticket": p.ticket,
+                "symbol": p.symbol,
+                "closed_lots": close_vol,
+                "remaining_lots": remaining,
+                "close_price": price,
+                "status": "CLOSED" if remaining <= 0 else "PARTIALLY_CLOSED"
+            }
+
+        try:
+            ok, data = await asyncio.wait_for(asyncio.to_thread(_sync_close), timeout=5.0)
+            if ok:
+                await log_event(
+                    "SIGNAL", "XM_EXECUTION",
+                    f"SUCCESS: #{data['ticket']} closed {data['closed_lots']} lots on {data['symbol']} @ {data['close_price']} ({data['status']}) via UI.",
+                    details=f"Remaining volume: {data['remaining_lots']} lots."
+                )
+                return {"success": True, **data}
+            else:
+                await log_event("WARNING", "XM_EXECUTION", f"Close position failed: {data}")
+                return {"success": False, "error": str(data)}
+        except Exception as e:
+            await log_event("ERROR", "XM_EXECUTION", f"Exception closing #{ticket_int}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def check_and_manage_1to1_positions(self) -> List[Dict[str, Any]]:
+        """
+        Polls XM MT5 positions (every 5s).
+        Calculates Risk R = |Entry - SL|.
+        If live profit >= 1R:
+          * Automatically closes 50% lots.
+          * Drags Stop Loss directly to Entry Price (Cost-to-Cost / Break-Even).
+          * Extends runner TP to 1:2.
+        """
+        if not self.is_connected or not MT5_AVAILABLE or self.is_mock_mode:
+            return []
+
+        def _sync_evaluate_1to1():
+            actions_to_take = []
+            positions = mt5.positions_get()
+            if not positions:
+                return actions_to_take
+
+            for p in positions:
+                ticket = int(p.ticket)
+                if ticket in self._managed_1to1_tickets:
+                    continue  # Already managed 1:1
+
+                entry = float(p.price_open)
+                sl = float(p.sl)
+                if sl <= 0 or entry <= 0:
+                    continue
+
+                risk = abs(entry - sl)
+                if risk <= 0:
+                    continue
+
+                tick = mt5.symbol_info_tick(p.symbol)
+                if not tick:
+                    continue
+
+                is_buy = (p.type == mt5.ORDER_TYPE_BUY)
+                current_price = tick.bid if is_buy else tick.ask
+                gain = (current_price - entry) if is_buy else (entry - current_price)
+
+                # Check if current profit >= 1:1 Risk
+                if gain >= risk:
+                    actions_to_take.append({
+                        "ticket": ticket,
+                        "symbol": p.symbol,
+                        "entry": entry,
+                        "sl": sl,
+                        "risk": risk,
+                        "gain": gain,
+                        "price": current_price
+                    })
+
+            return actions_to_take
+
+        try:
+            candidates = await asyncio.wait_for(asyncio.to_thread(_sync_evaluate_1to1), timeout=3.0)
+            results = []
+            for c in candidates:
+                ticket = c["ticket"]
+                self._managed_1to1_tickets.add(ticket)
+                res = await self.execute_partial_exit_and_extend_1to2(str(ticket))
+                if res.get("success"):
+                    results.append({"ticket": ticket, **res})
+            return results
+        except Exception as e:
+            return []
 
     async def _record_execution(
         self,
