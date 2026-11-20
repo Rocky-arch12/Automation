@@ -39,6 +39,24 @@ The channel owner frequently publishes signals in the following real-world patte
 6. Risky Trades:
    - Messages like "RISKY TRADE IN SELL SIDE GOLD" or "Small risk hai guyss" are REAL trades! Must be classified as "NEW_TRADE", never as chatter!
 
+7. TradingView Chart & Position Tool Extraction (CRUCIAL):
+   - When a chart screenshot is attached (e.g. accompanied by "Active trade" or sent as a setup):
+     * Inspect the right-hand vertical price scale / axis closely.
+     * The TradingView Long/Short Position Tool highlights key prices with colored labels:
+       - RED label/box on price axis: STOP LOSS (SL) price (e.g. 3729.423).
+       - GRAY central label/line on price axis: ENTRY price (e.g. 3725.299).
+       - GREEN or CYAN label/box on price axis: TAKE PROFIT (TP) price (e.g. 3700.174).
+     * For a SELL (Short) position:
+       - RED box is at the TOP (higher price, SL > Entry).
+       - GREEN box is at the BOTTOM (lower price, TP < Entry).
+       - Action MUST be "SELL".
+     * For a BUY (Long) position:
+       - GREEN box is at the TOP (higher price, TP > Entry).
+       - RED box is at the BOTTOM (lower price, SL < Entry).
+       - Action MUST be "BUY".
+     * NEVER set "sl": null when the chart image displays these colored position tool labels! Always read the numbers from the labels (e.g. 3729.423 or 3729).
+     * If the accompanying text says "Active trade" or "Active", set "is_active_now": true so it executes immediately on XM MT5!
+
 You MUST classify the incoming message into exactly ONE of the following three categories:
 
 1. "NEW_TRADE":
@@ -156,6 +174,7 @@ def build_context_prompt(
     if current_cv_info and current_cv_info.get("detected"):
         dir_str = "BUY (Long)" if current_cv_info.get("is_long") else "SELL (Short)"
         lines.append(f"Attached Chart Visual Tool: {dir_str} position detected on {current_cv_info.get('symbol', 'XAUUSD')}.")
+        lines.append("CRITICAL: Extract the Stop Loss (red label), Entry (gray label), and Take Profit (green/cyan label) from the right-hand vertical price axis labels of the TradingView position tool.")
 
     return "\n".join(lines)
 
@@ -630,9 +649,10 @@ def _normalize_ai_response(
     if intent not in ["NEW_TRADE", "TRADE_UPDATE", "OTHERS"]:
         if intent in ["CHATTER"]:
             intent = "OTHERS"
-        elif intent in ["PENDING_CONFIRMATION"]:
+        elif intent in ["PENDING_CONFIRMATION", "trade_setup", "new_trade", "TRADE_SETUP", "NEW_SETUP"]:
             intent = "NEW_TRADE"
-            parsed["is_active_now"] = False
+            if intent in ["PENDING_CONFIRMATION"]:
+                parsed["is_active_now"] = False
         else:
             intent = "OTHERS"
 
@@ -672,17 +692,39 @@ def _normalize_ai_response(
         else:
             action = "BUY"
 
+    entry_price = str(parsed.get("entry_price")).replace(",", "") if parsed.get("entry_price") is not None else None
+    if entry_price and entry_price.lower() in ["none", "null", "cmp"]:
+        entry_price = None
+
+    sl = str(parsed.get("sl")).replace(",", "") if parsed.get("sl") is not None else None
+    if sl and sl.lower() in ["none", "null", "open"]:
+        sl = None
+
     tp_val = parsed.get("tp")
     tp_levels = parsed.get("tp_levels", [])
     if tp_val:
-        tp_levels = [str(tp_val)]
+        tp_levels = [str(tp_val).replace(",", "")]
     elif not isinstance(tp_levels, list):
-        tp_levels = [str(tp_levels)] if tp_levels else []
+        tp_levels = [str(tp_levels).replace(",", "")] if tp_levels else []
     else:
-        tp_levels = [str(x) for x in tp_levels if x is not None]
+        tp_levels = [str(x).replace(",", "") for x in tp_levels if x is not None]
+
+    # Math consistency check between SL and TP
+    if sl and tp_levels:
+        try:
+            sl_f = float(sl)
+            tp_f = float(tp_levels[0])
+            if action == "SELL" and sl_f < tp_f:
+                # Swapped by vision model! Correct it
+                sl, tp_levels[0] = str(tp_f), str(sl_f)
+            elif action == "BUY" and sl_f > tp_f:
+                # Swapped by vision model! Correct it
+                sl, tp_levels[0] = str(tp_f), str(sl_f)
+        except Exception:
+            pass
 
     # If SL is given or numbers present and history had active lead, ensure NEW_TRADE:
-    if (is_active_lead or history_active) and intent == "OTHERS" and (parsed.get("sl") or re.search(r'\d+', raw_text)):
+    if (is_active_lead or history_active) and intent == "OTHERS" and (sl or re.search(r'\d+', raw_text)):
         intent = "NEW_TRADE"
 
     is_trade = 1 if intent in ["NEW_TRADE", "TRADE_UPDATE"] else 0
@@ -692,8 +734,8 @@ def _normalize_ai_response(
         "symbol": parsed.get("symbol") or "XAUUSD",
         "action": action,
         "order_type": (parsed.get("order_type") or "MARKET").upper(),
-        "entry_price": str(parsed.get("entry_price")) if parsed.get("entry_price") is not None else None,
-        "sl": str(parsed.get("sl")) if parsed.get("sl") is not None else None,
+        "entry_price": entry_price,
+        "sl": sl,
         "tp_levels": tp_levels,
         "is_trade": is_trade,
         "is_active_now": is_active_now,
