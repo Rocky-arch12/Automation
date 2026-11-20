@@ -7,10 +7,10 @@
   <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups">
   <meta name="theme-color" content="#06080d">
   <meta name="description" content="Institutional-grade Telegram trading signal intelligence & automated MT5 execution engine with real-time AI intent parsing.">
-  <title>AlphaSignal AI — Telegram Trading Signal Intelligence & Execution Engine</title>
+  <title>AlphaSignal AI — Autonomous Signal Intelligence &amp; Trading Engine</title>
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>α</text></svg>">
-  <link rel="stylesheet" href="./style.css?v=26">
+  <link rel="stylesheet" href="./style.css?v=30">
   <!-- Google Fonts — Inter (UI) + JetBrains Mono (numbers/code) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,6 +19,8 @@
     rel="stylesheet">
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Chart.js for High-Precision Financial Analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Google Identity Services (GIS) Official OAuth SDK -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -35,7 +37,7 @@
         <div class="brand-logo">α</div>
         <div>
           <h1 class="brand-title">AlphaSignal AI</h1>
-          <p class="brand-tagline">Autonomous Telegram Signal Intelligence & MT5 Engine</p>
+          <p class="brand-tagline">Autonomous Telegram Signal Intelligence &amp; MT5 Engine</p>
         </div>
       </div>
 
@@ -51,9 +53,9 @@
           <i data-lucide="settings" style="width: 14px; height: 14px;"></i>
           <span class="btn-text">Settings</span>
         </button>
-        <button class="btn btn-primary" onclick="navigateTo('login')">
-          <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
-          <span class="btn-text">Admin Access &rarr;</span>
+        <button class="btn btn-primary" onclick="handleDashboardAccess()">
+          <i data-lucide="layout-dashboard" style="width: 14px; height: 14px;"></i>
+          <span class="btn-text">Open Dashboard &rarr;</span>
         </button>
       </div>
     </nav>
@@ -197,9 +199,9 @@
     <div class="auth-page-container">
       <div class="auth-box">
         <div class="auth-box-top">
-          <button class="btn btn-secondary btn-sm" onclick="navigateTo('landing')">
+          <button class="btn btn-secondary btn-sm" onclick="navigateTo('dashboard')">
             <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i>
-            Back to Home
+            Enter Dashboard
           </button>
           <div class="brand-logo auth-box-logo">α</div>
         </div>
@@ -257,465 +259,859 @@
 
 
   <!-- ============================================================
-       VIEW 3: PROTECTED DASHBOARD (Authenticated Only)
+       VIEW 3: MULTI-PAGE TRADING INTELLIGENCE DASHBOARD (SHELL)
        ============================================================ -->
-  <div id="view-dashboard" class="spa-view" style="display: none;">
-    <!-- Top App Header -->
-    <header class="app-header">
-      <div class="brand-area" style="cursor: pointer;" onclick="navigateTo('landing')">
-        <div class="brand-logo">α</div>
-        <div>
-          <h1 class="brand-title">AlphaSignal AI</h1>
-          <p class="brand-tagline">Autonomous Telegram Signal Intelligence & Intent Filter</p>
-        </div>
-      </div>
+  <div id="view-dashboard" class="spa-view">
+    <div class="app-shell" id="app-shell">
+      <!-- Mobile Sidebar Backdrop -->
+      <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
 
-      <div class="header-status-group">
-        <div class="status-badges-scroller">
-          <div class="status-badge" id="tg-status-badge">
-            <span class="pulse-dot idle" id="tg-pulse"></span>
-            <span id="tg-status-text">Telegram: Standby</span>
+      <!-- Persistent Left Sidebar Navigation -->
+      <aside class="app-sidebar" id="app-sidebar">
+        <div class="sidebar-header">
+          <div class="brand-area" onclick="switchDashboardPage('dashboard')" style="cursor: pointer;">
+            <div class="brand-logo">α</div>
+            <div class="brand-info">
+              <h1 class="brand-title">AlphaSignal AI</h1>
+              <p class="brand-tagline">Autonomous MT5 Engine</p>
+            </div>
           </div>
-          <div class="status-badge" id="ai-status-badge">
-            <i data-lucide="cpu" style="width: 14px; height: 14px; color: var(--info-text);"></i>
-            <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
-          </div>
-          <div class="status-badge" id="xm-status-badge" onclick="openSettingsModal()"
-            style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
-            title="XM MT5 Demo Broker Execution Status (Click to configure)">
-            <i data-lucide="zap" style="width: 14px; height: 14px; color: var(--warning-text);"></i>
-            <span id="xm-status-text">XM MT5: Demo Active</span>
-          </div>
-          <div class="status-badge" id="ws-status-badge">
-            <i data-lucide="activity" style="width: 14px; height: 14px; color: var(--success-text);"></i>
-            <span id="ws-status-text">Live: Connecting...</span>
-          </div>
-          <div id="user-profile-badge" class="status-badge" style="display: flex; border-color: rgba(56, 189, 248, 0.4);"
-            title="Active Trader Profile">
-            <i data-lucide="shield-check" style="width: 14px; height: 14px; color: var(--info-text);"></i>
-            <span id="user-display-name">Trader</span>
-          </div>
-        </div>
-
-        <div class="header-actions">
-          <button class="btn btn-secondary" onclick="openSettingsModal()" title="System Settings">
-            <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
-            <span class="btn-text">Settings</span>
-          </button>
-          <button class="btn btn-secondary" onclick="logoutUser()" title="Sign out of your session">
-            <i data-lucide="log-out" style="width: 15px; height: 15px;"></i>
-            <span class="btn-text">Sign Out</span>
-          </button>
-          <button class="btn btn-danger" onclick="confirmClearData()" title="Clear Live Stream">
-            <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
-            <span class="btn-text">Clear</span>
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <!-- KPI Stats Banner -->
-    <section class="stats-grid">
-      <div class="stat-card total">
-        <div class="stat-label">Total Messages Monitored</div>
-        <div class="stat-value" id="kpi-total">0</div>
-        <div class="stat-sub">From Telegram channel & simulator</div>
-      </div>
-      <div class="stat-card trades">
-        <div class="stat-label">Valid Trade Signals</div>
-        <div class="stat-value" id="kpi-trades" style="color: var(--success-text);">0</div>
-        <div class="stat-sub" id="kpi-trades-sub">New signals & entry setups</div>
-      </div>
-      <div class="stat-card chatter">
-        <div class="stat-label">Chatter Filtered Out</div>
-        <div class="stat-value" id="kpi-chatter" style="color: var(--purple-text);">0</div>
-        <div class="stat-sub" id="kpi-noise-rate">0% noise rejection</div>
-      </div>
-      <div class="stat-card latency">
-        <div class="stat-label">Avg AI Latency</div>
-        <div class="stat-value" id="kpi-latency" style="color: var(--info-text);">0 ms</div>
-        <div class="stat-sub" id="kpi-confidence">0% average confidence</div>
-      </div>
-    </section>
-
-    <!-- Main Split Layout -->
-    <main class="main-layout">
-      <!-- Left Pane: Real-Time Signal Stream -->
-      <div class="panel-container">
-        <div class="panel-header">
-          <div class="panel-title">
-            <i data-lucide="radio" style="width: 18px; height: 18px; color: var(--primary);"></i>
-            Live Signal Feed & Decision Stream
-          </div>
-          <div class="search-box">
-            <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-muted);"></i>
-            <input type="text" id="signal-search" placeholder="Search signals, coins..."
-              oninput="handleSearch(this.value)">
-          </div>
-          <div class="filter-group">
-            <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">All</button>
-            <button class="filter-btn" data-filter="TRADES" onclick="setFilter('TRADES')">Trades</button>
-            <button class="filter-btn" data-filter="UPDATES" onclick="setFilter('UPDATES')">Updates</button>
-            <button class="filter-btn" data-filter="CHATTER" onclick="setFilter('CHATTER')">Chatter</button>
-          </div>
-        </div>
-        <div class="panel-body feed-scroll" id="message-feed">
-          <!-- Feed cards populated via JavaScript -->
-        </div>
-      </div>
-
-      <!-- Right Pane: Simulator / Trades Watchlist / Logs -->
-      <div class="panel-container">
-        <div class="tab-nav">
-          <button class="tab-btn active" onclick="switchTab('simulator')" id="tab-btn-simulator">
-            <i data-lucide="flask-conical" style="width: 15px; height: 15px;"></i>
-            Signal Simulator
-          </button>
-          <button class="tab-btn" onclick="switchTab('watchlist')" id="tab-btn-watchlist">
-            <i data-lucide="crosshair" style="width: 15px; height: 15px;"></i>
-            Trade Watchlist
-          </button>
-          <button class="tab-btn" onclick="switchTab('positions')" id="tab-btn-positions">
-            <i data-lucide="trending-up" style="width: 15px; height: 15px;"></i>
-            Active MT5 Trades
-            <span class="badge" id="open-positions-badge" style="display:none; margin-left:4px;">0</span>
-          </button>
-          <button class="tab-btn" onclick="switchTab('terminal')" id="tab-btn-terminal">
-            <i data-lucide="terminal" style="width: 15px; height: 15px;"></i>
-            Live Terminal
+          <button class="sidebar-collapse-btn" onclick="toggleSidebar()" title="Collapse / Expand Sidebar" aria-label="Toggle sidebar width">
+            <i data-lucide="chevron-left" class="collapse-icon"></i>
           </button>
         </div>
 
-        <!-- Tab 1: Signal Simulator -->
-        <div class="tab-content" id="tab-simulator">
-          <div class="simulator-presets-bar">
-            <div class="presets-label">
-              <i data-lucide="sparkles" style="width: 13px; height: 13px;"></i>
-              Simulate Telegram Channel Signals (AI Classifies with 10-Message History)
+        <!-- Sidebar Navigation Items -->
+        <nav class="sidebar-nav">
+          <div class="nav-section-title">TRADING DESK</div>
+          <button class="nav-item active" data-page="dashboard" onclick="switchDashboardPage('dashboard')">
+            <i data-lucide="layout-dashboard"></i>
+            <span class="nav-text">Dashboard</span>
+          </button>
+          <button class="nav-item" data-page="chats" onclick="switchDashboardPage('chats')">
+            <i data-lucide="message-square"></i>
+            <span class="nav-text">Recorded Chats</span>
+            <span class="nav-badge" id="nav-chats-badge">0</span>
+          </button>
+          <button class="nav-item" data-page="signals" onclick="switchDashboardPage('signals')">
+            <i data-lucide="radio"></i>
+            <span class="nav-text">Trade Signals</span>
+            <span class="nav-badge nav-badge-accent" id="nav-signals-badge">0</span>
+          </button>
+          <button class="nav-item" data-page="positions" onclick="switchDashboardPage('positions')">
+            <i data-lucide="trending-up"></i>
+            <span class="nav-text">Active Trades</span>
+            <span class="badge" id="open-positions-badge" style="display:none; margin-left:auto;">0</span>
+          </button>
+          <button class="nav-item" data-page="watchlist" onclick="switchDashboardPage('watchlist')">
+            <i data-lucide="crosshair"></i>
+            <span class="nav-text">Trade Watchlist</span>
+          </button>
+
+          <div class="nav-section-title">INTELLIGENCE TOOLS</div>
+          <button class="nav-item" data-page="simulator" onclick="switchDashboardPage('simulator')">
+            <i data-lucide="flask-conical"></i>
+            <span class="nav-text">Signal Simulator</span>
+          </button>
+          <button class="nav-item" data-page="terminal" onclick="switchDashboardPage('terminal')">
+            <i data-lucide="terminal"></i>
+            <span class="nav-text">Live Terminal</span>
+          </button>
+          <button class="nav-item" data-page="settings" onclick="switchDashboardPage('settings')">
+            <i data-lucide="sliders"></i>
+            <span class="nav-text">Settings</span>
+          </button>
+        </nav>
+
+        <!-- Sidebar Footer Status -->
+        <div class="sidebar-footer">
+          <div class="sidebar-status-card">
+            <div class="sidebar-status-row">
+              <span class="pulse-dot"></span>
+              <span class="sidebar-status-title">Engine Autonomous</span>
             </div>
-            <div class="presets-row">
-              <button class="preset-btn preset-pending" onclick="injectPreset('PENDING')">
-                🟡 Pending Signal (Wait for Tap)
-              </button>
-              <button class="preset-btn preset-active" onclick="injectPreset('ACTIVE_MARKET')">
-                🟢 Market Trade (Active Now)
-              </button>
-              <button class="preset-btn preset-confirm" onclick="injectPreset('ACTIVATE_CONFIRM')">
-                ⚡ Owner: "ACTIVE NOW, ENTER CMP!"
-              </button>
-              <button class="preset-btn preset-cancel" onclick="injectPreset('CANCEL')">
-                🛑 Owner: "Cancel Setup / Do Not Enter"
-              </button>
-              <button class="preset-btn preset-chatter" onclick="injectPreset('CHATTER')">
-                💬 Channel Chatter
-              </button>
-            </div>
+            <div class="sidebar-status-sub">Zero-Knowledge AES-256 Vault</div>
           </div>
+        </div>
+      </aside>
 
-          <form id="simulator-form" onsubmit="submitSimulation(event)">
-            <div class="form-group">
-              <label class="form-label" for="sim-sender">Simulated Sender Name</label>
-              <input type="text" id="sim-sender" class="form-control" value="Channel Owner"
-                placeholder="e.g. VIP Admin, Owner">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="sim-channel">Channel Name</label>
-              <input type="text" id="sim-channel" class="form-control" value="VIP Forex & Crypto Signals"
-                placeholder="e.g. ALPHA PREMIUM Signals">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="sim-text">Message Content (Text, Slang, Pips, SL/TP, or Casual Talk)</label>
-              <textarea id="sim-text" class="form-control" rows="4"
-                placeholder="E.g., BUY GOLD 2640-2642 SL 2634 TP1 2648... or '1:1 DONE book partial' or 'RISK FREE KRDO'"></textarea>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Attach Chart Screenshot / Image (Optional for Vision AI)</label>
-              <div class="drop-zone" id="drop-zone" onclick="document.getElementById('sim-file').click()">
-                <i data-lucide="image-plus" style="width: 28px; height: 28px; color: var(--text-muted);"></i>
-                <div class="drop-zone-title">Click to upload or drag screenshot here</div>
-                <div class="drop-zone-hint">Supports PNG, JPG, WEBP (MT4/5 screenshots, TradingView charts)</div>
-                <input type="file" id="sim-file" accept="image/*" style="display: none;"
-                  onchange="handleFileSelect(event)">
-              </div>
-              <div id="file-preview-area" class="file-preview-area" style="display: none;">
-                <div class="file-preview-info">
-                  <img id="preview-thumbnail" class="file-preview-thumb" alt="Selected screenshot preview">
-                  <span id="preview-filename" class="file-preview-name"></span>
-                </div>
-                <button type="button" class="btn btn-danger btn-sm" onclick="clearSelectedFile()">Remove</button>
-              </div>
-            </div>
-
-            <button type="submit" class="btn btn-primary btn-block" id="btn-sim-submit">
-              <i data-lucide="send" style="width: 16px; height: 16px;"></i>
-              Process &amp; Filter with AI
+      <!-- Main Workspace -->
+      <div class="app-main">
+        <!-- Compact Top Header -->
+        <header class="app-header">
+          <div class="header-left">
+            <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="Toggle navigation menu">
+              <i data-lucide="menu"></i>
             </button>
-          </form>
-        </div>
-
-        <!-- Tab 2: Trade Watchlist & Outcomes -->
-        <div class="tab-content" id="tab-watchlist" style="display: none;">
-          <div class="tab-toolbar">
-            <div class="tab-toolbar-text">Active & Closed Managed Trades</div>
-            <button class="btn btn-secondary btn-sm" onclick="loadTrades()">
-              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
-              Refresh
-            </button>
+            <div class="header-breadcrumbs">
+              <span class="breadcrumb-root" onclick="switchDashboardPage('dashboard')" style="cursor: pointer;">AlphaSignal</span>
+              <span class="breadcrumb-sep">/</span>
+              <span class="breadcrumb-current" id="header-page-title">Dashboard</span>
+            </div>
           </div>
-          <div id="watchlist-container" class="watchlist-container">
-            <!-- Populated via loadTrades() -->
-          </div>
-        </div>
 
-        <!-- Tab 3: Active Running Trades in XM MT5 -->
-        <div class="tab-content tab-content-positions" id="tab-positions" style="display: none;">
-          <div class="tab-toolbar">
-            <div>
-              <div class="tab-toolbar-title">
+          <div class="header-status-group">
+            <div class="status-badges-scroller">
+              <div class="status-badge" id="tg-status-badge">
+                <span class="pulse-dot idle" id="tg-pulse"></span>
+                <span id="tg-status-text">Telegram: Standby</span>
+              </div>
+              <div class="status-badge" id="ai-status-badge">
+                <i data-lucide="cpu" style="width: 14px; height: 14px; color: var(--info-text);"></i>
+                <span id="ai-status-text">AI: Groq (Llama 3.3)</span>
+              </div>
+              <div class="status-badge" id="xm-status-badge" onclick="switchDashboardPage('positions')"
+                style="cursor: pointer; border-color: rgba(245, 158, 11, 0.4);"
+                title="XM MT5 Execution Status (Click to view positions)">
+                <i data-lucide="zap" style="width: 14px; height: 14px; color: var(--warning-text);"></i>
+                <span id="xm-status-text">XM MT5: Demo Active</span>
+              </div>
+              <div class="status-badge" id="ws-status-badge">
                 <i data-lucide="activity" style="width: 14px; height: 14px; color: var(--success-text);"></i>
-                Live Open Positions in XM MT5
+                <span id="ws-status-text">Live: Connecting...</span>
               </div>
-              <div class="tab-toolbar-sub">Strict Lot Sizing: 0.02 Gold / 0.04 Bitcoin / 0.01 Others | Hands-Off
-                Execution</div>
+              <div id="user-profile-badge" class="status-badge" style="display: flex; border-color: rgba(56, 189, 248, 0.4);"
+                title="Active Trader Profile">
+                <i data-lucide="shield-check" style="width: 14px; height: 14px; color: var(--info-text);"></i>
+                <span id="user-display-name">Trader</span>
+              </div>
             </div>
-            <button class="btn btn-secondary btn-sm" onclick="loadXMPositions()">
-              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
-              Refresh
-            </button>
-          </div>
 
-          <div id="xm-positions-meta" class="xm-positions-meta">
-            <div><span class="meta-label">Server:</span> <strong id="xm-meta-server">XMGlobal-MT5</strong></div>
-            <div><span class="meta-label">Account:</span> <strong id="xm-meta-account">#Demo</strong></div>
-            <div><span class="meta-label">Open Positions:</span> <strong id="xm-meta-count"
-                style="color: var(--success-text);">0</strong></div>
-            <div><span class="meta-label">Floating PnL:</span> <strong id="xm-meta-pnl"
-                style="color: var(--success-text);">$0.00</strong></div>
-          </div>
-
-          <div id="positions-container">
-            <div class="empty-state">
-              <i data-lucide="shield-check" style="width: 32px; height: 32px; color: var(--success-text);"></i>
-              <div class="empty-state-title">No Active Running Trades in XM MT5</div>
+            <div class="header-actions">
+              <button class="btn btn-secondary" onclick="openSettingsModal()" title="System Settings">
+                <i data-lucide="settings" style="width: 15px; height: 15px;"></i>
+                <span class="btn-text">Settings</span>
+              </button>
+              <button class="btn btn-secondary" onclick="logoutUser()" title="Sign out of your session">
+                <i data-lucide="log-out" style="width: 15px; height: 15px;"></i>
+                <span class="btn-text">Sign Out</span>
+              </button>
+              <button class="btn btn-danger" onclick="confirmClearData()" title="Clear Live Stream">
+                <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
+                <span class="btn-text">Clear</span>
+              </button>
             </div>
           </div>
-        </div>
+        </header>
 
-        <!-- Tab 4: Live Terminal -->
-        <div class="tab-content tab-content-terminal" id="tab-terminal" style="display: none;">
-          <div class="terminal-window" id="terminal-logs">
-            <div class="log-entry">
-              <span class="log-time">[System]</span>
-              <span class="log-level-INFO">[INFO]</span>
-              <span class="log-msg">Terminal ready. Real-time background events will appear here.</span>
+        <!-- App Page Container -->
+        <main class="app-page-container">
+
+          <!-- ========================================================
+               PAGE 1: DASHBOARD OVERVIEW
+               ======================================================== -->
+          <div id="page-dashboard" class="page-section active-page">
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Trading Intelligence Overview</h2>
+                <p class="page-header-desc">Real-time telemetry, AI decision accuracy, signal distribution, and broker metrics</p>
+              </div>
+              <div class="page-header-actions">
+                <button class="btn btn-secondary btn-sm" onclick="loadStats(); updateDashboardCharts();">
+                  <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                  Refresh Analytics
+                </button>
+              </div>
+            </div>
+
+            <!-- KPI Stats Banner -->
+            <section class="stats-grid">
+              <div class="stat-card total">
+                <div class="stat-label">Total Messages Monitored</div>
+                <div class="stat-value" id="kpi-total">0</div>
+                <div class="stat-sub">From Telegram channel &amp; simulator</div>
+              </div>
+              <div class="stat-card trades">
+                <div class="stat-label">Valid Trade Signals</div>
+                <div class="stat-value" id="kpi-trades" style="color: var(--success-text);">0</div>
+                <div class="stat-sub" id="kpi-trades-sub">New signals &amp; entry setups</div>
+              </div>
+              <div class="stat-card chatter">
+                <div class="stat-label">Chatter Filtered Out</div>
+                <div class="stat-value" id="kpi-chatter" style="color: var(--purple-text);">0</div>
+                <div class="stat-sub" id="kpi-noise-rate">0% noise rejection</div>
+              </div>
+              <div class="stat-card latency">
+                <div class="stat-label">Avg AI Latency</div>
+                <div class="stat-value" id="kpi-latency" style="color: var(--info-text);">0 ms</div>
+                <div class="stat-sub" id="kpi-confidence">0% average confidence</div>
+              </div>
+            </section>
+
+            <!-- 4 Interactive Charts Grid -->
+            <section class="dashboard-charts-grid">
+              <!-- Chart 1: Signal Activity Over Time -->
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div class="chart-card-title">
+                    <i data-lucide="activity" style="width: 16px; height: 16px; color: var(--primary);"></i>
+                    Signal Activity Over Time
+                  </div>
+                  <span class="chart-card-badge">Real-Time</span>
+                </div>
+                <div class="chart-box">
+                  <canvas id="chart-activity"></canvas>
+                </div>
+              </div>
+
+              <!-- Chart 2: Buy vs Sell Intent Ratio -->
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div class="chart-card-title">
+                    <i data-lucide="pie-chart" style="width: 16px; height: 16px; color: var(--success-text);"></i>
+                    Buy vs Sell Direction
+                  </div>
+                  <span class="chart-card-badge">Intent Ratio</span>
+                </div>
+                <div class="chart-box">
+                  <canvas id="chart-buysell"></canvas>
+                </div>
+              </div>
+
+              <!-- Chart 3: Top Asset Distribution -->
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div class="chart-card-title">
+                    <i data-lucide="bar-chart-3" style="width: 16px; height: 16px; color: var(--warning-text);"></i>
+                    Asset Distribution
+                  </div>
+                  <span class="chart-card-badge">Symbol Frequencies</span>
+                </div>
+                <div class="chart-box">
+                  <canvas id="chart-assets"></canvas>
+                </div>
+              </div>
+
+              <!-- Chart 4: AI Inference & Processing Latency -->
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div class="chart-card-title">
+                    <i data-lucide="cpu" style="width: 16px; height: 16px; color: var(--info-text);"></i>
+                    AI Processing Latency (ms)
+                  </div>
+                  <span class="chart-card-badge">Groq Llama 3.3</span>
+                </div>
+                <div class="chart-box">
+                  <canvas id="chart-performance"></canvas>
+                </div>
+              </div>
+            </section>
+
+            <!-- Dashboard Recent Activity Split View -->
+            <div class="dashboard-split-grid">
+              <!-- Recent High-Confidence Signals -->
+              <div class="panel-container">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i data-lucide="radio" style="width: 16px; height: 16px; color: var(--primary);"></i>
+                    Recent Valid Signals
+                  </div>
+                  <button class="btn btn-secondary btn-xs" onclick="switchDashboardPage('signals')">
+                    View All Signals &rarr;
+                  </button>
+                </div>
+                <div class="panel-body dash-preview-list" id="dash-recent-signals">
+                  <!-- Populated dynamically via JS -->
+                </div>
+              </div>
+
+              <!-- Active Positions & Infrastructure Telemetry -->
+              <div class="panel-container">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i data-lucide="shield-check" style="width: 16px; height: 16px; color: var(--success-text);"></i>
+                    System Health &amp; MT5 Live Glance
+                  </div>
+                  <button class="btn btn-secondary btn-xs" onclick="switchDashboardPage('positions')">
+                    Manage Positions &rarr;
+                  </button>
+                </div>
+                <div class="panel-body" style="padding: 1.15rem;">
+                  <div class="infra-health-grid">
+                    <div class="infra-health-item">
+                      <div class="infra-health-label">Telegram Harvester</div>
+                      <div class="infra-health-val" id="infra-tg-val"><span class="pulse-dot"></span> Active Multi-Channel</div>
+                    </div>
+                    <div class="infra-health-item">
+                      <div class="infra-health-label">AI LLM Model</div>
+                      <div class="infra-health-val" style="color: var(--info-text);"><i data-lucide="cpu" style="width:12px;height:12px;"></i> Groq Llama 3.3</div>
+                    </div>
+                    <div class="infra-health-item">
+                      <div class="infra-health-label">Broker Link</div>
+                      <div class="infra-health-val" style="color: var(--warning-text);"><i data-lucide="zap" style="width:12px;height:12px;"></i> XM MT5 Execution</div>
+                    </div>
+                    <div class="infra-health-item">
+                      <div class="infra-health-label">WebSocket Stream</div>
+                      <div class="infra-health-val" style="color: var(--success-text);"><i data-lucide="activity" style="width:12px;height:12px;"></i> 0ms Latency Loop</div>
+                    </div>
+                  </div>
+
+                  <div style="margin-top: 1.25rem;">
+                    <div class="tab-toolbar-title" style="margin-bottom: 0.65rem;">
+                      <i data-lucide="trending-up" style="width: 14px; height: 14px; color: var(--success-text);"></i>
+                      Active Positions Summary
+                    </div>
+                    <div id="dash-positions-summary">
+                      <!-- Populated dynamically via JS -->
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+
+
+          <!-- ========================================================
+               PAGE 2: RECORDED CHATS (Telegram Message Stream)
+               ======================================================== -->
+          <div id="page-chats" class="page-section" style="display: none;">
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Recorded Telegram Chats</h2>
+                <p class="page-header-desc">Complete multi-channel Telegram message stream, AI classifications, and raw screenshots</p>
+              </div>
+              <div class="page-header-actions">
+                <button class="btn btn-secondary btn-sm" onclick="loadMessages()">
+                  <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                  Refresh Chats
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-container">
+              <div class="panel-header chats-filter-header">
+                <div class="search-box chats-search-box">
+                  <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-muted);"></i>
+                  <input type="text" id="signal-search" placeholder="Search chats, text, symbols, senders..."
+                    oninput="handleSearch(this.value)">
+                  <input type="hidden" id="feed-search">
+                </div>
+
+                <div class="chats-filters-row">
+                  <select id="chat-channel-filter" class="form-control chats-filter-select" onchange="filterChatsByChannel(this.value)">
+                    <option value="ALL">All Channels</option>
+                  </select>
+
+                  <div class="filter-group">
+                    <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL', this)">All</button>
+                    <button class="filter-btn" data-filter="TRADES" onclick="setFilter('TRADES', this)">Trades</button>
+                    <button class="filter-btn" data-filter="UPDATES" onclick="setFilter('UPDATES', this)">Updates</button>
+                    <button class="filter-btn" data-filter="CHATTER" onclick="setFilter('CHATTER', this)">Chatter</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Message Feed Container (Existing ID preserved for app.js) -->
+              <div class="panel-body feed-scroll" id="message-feed" style="max-height: calc(100vh - 250px);">
+                <!-- Populated via renderFeed(messages) -->
+              </div>
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 3: TRADE SIGNALS (Structured Intelligence Table)
+               ======================================================== -->
+          <div id="page-signals" class="page-section" style="display: none;">
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Detected Trading Signals</h2>
+                <p class="page-header-desc">AI-validated trading setups with entry, Stop Loss, Take Profit, and confidence ratings</p>
+              </div>
+              <div class="page-header-actions">
+                <div class="filter-group">
+                  <button class="filter-btn active" onclick="filterSignalsDirection('ALL', this)">All Signals</button>
+                  <button class="filter-btn" onclick="filterSignalsDirection('BUY', this)">BUY Only</button>
+                  <button class="filter-btn" onclick="filterSignalsDirection('SELL', this)">SELL Only</button>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="loadMessages()">
+                  <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-container">
+              <div id="signals-workspace-container" class="signals-workspace-container">
+                <!-- Rendered dynamically via renderTradeSignals() -->
+              </div>
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 4: ACTIVE TRADES (XM MT5 Positions Command Center)
+               ======================================================== -->
+          <div id="page-positions" class="page-section" style="display: none;">
+            <div id="tab-positions" style="display: none;"></div>
+            <div class="page-header-bar">
+              <div>
+                <div class="trade-head-row">
+                  <h2 class="page-header-title">Live MT5 Positions</h2>
+                  <span class="settings-chip settings-chip-amber" id="xm-account-badge">XM MT5 Demo</span>
+                </div>
+                <p class="page-header-desc">Autonomous hands-off order execution with 0.02 Gold / 0.04 Bitcoin lot normalization and 1:1 Breakeven trailing</p>
+              </div>
+              <div class="page-header-actions">
+                <button class="btn btn-secondary btn-sm" onclick="loadXMPositions()">
+                  <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                  Refresh Positions
+                </button>
+              </div>
+            </div>
+
+            <!-- Existing ID preserved for loadXMPositions() -->
+            <div id="xm-positions-meta" class="xm-positions-meta">
+              <div><span class="meta-label">Server:</span> <strong id="xm-meta-server">XMGlobal-MT5</strong></div>
+              <div><span class="meta-label">Account:</span> <strong id="xm-meta-account">#Demo</strong></div>
+              <div><span class="meta-label">Open Positions:</span> <strong id="xm-meta-count"
+                  style="color: var(--success-text);">0</strong></div>
+              <div><span class="meta-label">Floating PnL:</span> <strong id="xm-meta-pnl"
+                  style="color: var(--success-text);">$0.00</strong></div>
+            </div>
+
+            <!-- Existing ID preserved for positions container -->
+            <div id="positions-container">
+              <div class="empty-state">
+                <i data-lucide="shield-check" style="width: 36px; height: 36px; color: var(--success-text);"></i>
+                <div class="empty-state-title">No Active Running Trades in XM MT5</div>
+                <div class="empty-state-sub">When a signal activates, it executes automatically on XM MT5 with strict SL, TP, and lot size.</div>
+              </div>
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 5: TRADE WATCHLIST (Lifecycle Audit Tracker)
+               ======================================================== -->
+          <div id="page-watchlist" class="page-section" style="display: none;">
+            <div id="tab-watchlist" style="display: none;"></div>
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Trade Lifecycle Watchlist</h2>
+                <p class="page-header-desc">Complete state machine audit trail: pending taps, active trades, 1:1 Breakeven hits, and closures</p>
+              </div>
+              <div class="page-header-actions">
+                <div class="filter-group">
+                  <button class="filter-btn active" onclick="setTradeFilter('ALL', this)">All</button>
+                  <button class="filter-btn" onclick="setTradeFilter('ACTIVE', this)">Active</button>
+                  <button class="filter-btn" onclick="setTradeFilter('PENDING', this)">Pending</button>
+                  <button class="filter-btn" onclick="setTradeFilter('TP_HIT', this)">TP Hit</button>
+                  <button class="filter-btn" onclick="setTradeFilter('SL_HIT', this)">SL Hit</button>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="loadTrades()">
+                  <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <!-- Existing ID preserved for watchlist -->
+            <div id="watchlist-container" class="watchlist-container">
+              <!-- Populated via loadTrades() -->
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 6: SIGNAL SIMULATOR (Interactive Testing Lab)
+               ======================================================== -->
+          <div id="page-simulator" class="page-section" style="display: none;">
+            <div id="tab-simulator" style="display: none;"></div>
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Signal Simulator Workspace</h2>
+                <p class="page-header-desc">Test real-time AI parsing against raw trader slang, typo-filled text, or chart screenshots</p>
+              </div>
+            </div>
+
+            <div class="simulator-layout-grid">
+              <!-- Simulator Form Box -->
+              <div class="panel-container">
+                <div class="simulator-presets-bar">
+                  <div class="presets-label">
+                    <i data-lucide="sparkles" style="width: 13px; height: 13px;"></i>
+                    Instant Signal Presets (10-Message History Intent Classifier)
+                  </div>
+                  <div class="presets-row">
+                    <button type="button" class="preset-btn preset-pending" onclick="injectPreset('PENDING')">
+                      🟡 Pending Signal (Wait for Tap)
+                    </button>
+                    <button type="button" class="preset-btn preset-active" onclick="injectPreset('ACTIVE_MARKET')">
+                      🟢 Market Trade (Active Now)
+                    </button>
+                    <button type="button" class="preset-btn preset-confirm" onclick="injectPreset('ACTIVATE_CONFIRM')">
+                      ⚡ Owner: "ACTIVE NOW, ENTER CMP!"
+                    </button>
+                    <button type="button" class="preset-btn preset-cancel" onclick="injectPreset('CANCEL')">
+                      🛑 Owner: "Cancel Setup / Do Not Enter"
+                    </button>
+                    <button type="button" class="preset-btn preset-chatter" onclick="injectPreset('CHATTER')">
+                      💬 Channel Chatter
+                    </button>
+                  </div>
+                </div>
+
+                <form id="simulator-form" onsubmit="submitSimulation(event)" style="padding: 1.25rem;">
+                  <div class="form-row-2col">
+                    <div class="form-group">
+                      <label class="form-label" for="sim-sender">Simulated Sender Name</label>
+                      <input type="text" id="sim-sender" class="form-control" value="Channel Owner"
+                        placeholder="e.g. VIP Admin, Owner">
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label" for="sim-channel">Channel Name</label>
+                      <input type="text" id="sim-channel" class="form-control" value="VIP Forex &amp; Crypto Signals"
+                        placeholder="e.g. ALPHA PREMIUM Signals">
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="sim-text">Message Content (Text, Slang, Pips, SL/TP, or Casual Chatter)</label>
+                    <textarea id="sim-text" class="form-control" rows="4"
+                      placeholder="E.g., BUY GOLD 2640-2642 SL 2634 TP1 2648... or '1:1 DONE book partial' or 'RISK FREE KRDO'"></textarea>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">Attach Chart Screenshot / Image (Optional for Vision AI)</label>
+                    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('sim-file').click()">
+                      <div id="dropzone" style="display: none;"></div>
+                      <i data-lucide="image-plus" style="width: 28px; height: 28px; color: var(--text-muted);"></i>
+                      <div class="drop-zone-title">Click to upload or drag screenshot here</div>
+                      <div class="drop-zone-hint">Supports PNG, JPG, WEBP (MT4/5 screenshots, TradingView charts)</div>
+                      <input type="file" id="sim-file" accept="image/*" style="display: none;"
+                        onchange="handleFileSelect(event)">
+                    </div>
+                    <div id="file-preview-area" class="file-preview-area" style="display: none;">
+                      <span id="file-preview-badge" style="display: none;"></span>
+                      <div class="file-preview-info">
+                        <img id="preview-thumbnail" class="file-preview-thumb" alt="Selected screenshot preview">
+                        <span id="preview-filename" class="file-preview-name"></span>
+                        <span id="file-name-text" style="display: none;"></span>
+                      </div>
+                      <button type="button" class="btn btn-danger btn-sm" onclick="clearSelectedFile()">Remove</button>
+                    </div>
+                  </div>
+
+                  <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-sim-submit">
+                    <span id="sim-submit-btn" style="display: none;"></span>
+                    <i data-lucide="send" style="width: 16px; height: 16px;"></i>
+                    Process &amp; Filter with AI
+                  </button>
+                </form>
+              </div>
+
+              <!-- Simulation Output Panel -->
+              <div class="panel-container">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i data-lucide="cpu" style="width: 16px; height: 16px; color: var(--info-text);"></i>
+                    Real-Time Simulation Feedback
+                  </div>
+                </div>
+                <div class="panel-body" id="sim-feedback-container" style="padding: 1.25rem;">
+                  <div class="empty-state">
+                    <i data-lucide="flask-conical" style="width: 36px; height: 36px; color: var(--info-text); opacity: 0.5;"></i>
+                    <div class="empty-state-title">Simulator Ready</div>
+                    <div class="empty-state-sub">Select a preset above or enter custom message text, then click "Process &amp; Filter with AI" to inspect intent extraction.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 7: LIVE TERMINAL (Developer Execution Logs)
+               ======================================================== -->
+          <div id="page-terminal" class="page-section" style="display: none;">
+            <div id="tab-terminal" style="display: none;"></div>
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">Live System Terminal</h2>
+                <p class="page-header-desc">Real-time WebSocket event bus, AI inference logs, and MT5 broker execution receipts</p>
+              </div>
+              <div class="page-header-actions">
+                <div class="filter-group">
+                  <button class="filter-btn active" onclick="filterLogs('ALL', this)">All</button>
+                  <button class="filter-btn" onclick="filterLogs('INFO', this)">INFO</button>
+                  <button class="filter-btn" onclick="filterLogs('SIGNAL', this)">SIGNAL</button>
+                  <button class="filter-btn" onclick="filterLogs('WARN', this)">WARN</button>
+                  <button class="filter-btn" onclick="filterLogs('ERROR', this)">ERROR</button>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-terminal-scroll" onclick="toggleTerminalAutoScroll()">
+                  <i data-lucide="arrow-down" style="width: 13px; height: 13px;"></i>
+                  Auto-Scroll: ON
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="clearTerminalLogs()">
+                  <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
+                  Clear Terminal
+                </button>
+              </div>
+            </div>
+
+            <div class="terminal-card-container">
+              <!-- Existing ID preserved for terminal -->
+              <div class="terminal-window" id="terminal-logs" style="height: calc(100vh - 250px);">
+                <div class="log-entry">
+                  <span class="log-time">[System]</span>
+                  <span class="log-level-INFO">[INFO]</span>
+                  <span class="log-msg">Terminal ready. Real-time background events will appear here.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+
+          <!-- ========================================================
+               PAGE 8: SETTINGS (Full Dedicated Configuration Page)
+               ======================================================== -->
+          <div id="page-settings" class="page-section" style="display: none;">
+            <div class="page-header-bar">
+              <div>
+                <h2 class="page-header-title">System Settings &amp; Integrations</h2>
+                <p class="page-header-desc">Configure Telegram multi-channel listeners, Groq/Gemini AI credentials, XM MT5 broker accounts, and tunnels</p>
+              </div>
+              <div class="page-header-actions">
+                <button class="btn btn-primary" onclick="saveSettings()">
+                  <i data-lucide="save" style="width: 14px; height: 14px;"></i>
+                  Save Configuration
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-page-grid">
+              <!-- Section 1: AI Provider -->
+              <section class="settings-section-card">
+                <h3 class="settings-section-title settings-section-blue">
+                  1. Free AI Provider Configuration
+                </h3>
+
+                <div class="form-group">
+                  <label class="form-label" for="setting-provider">Active AI Provider</label>
+                  <select id="setting-provider" class="form-control" onchange="toggleProviderFields()">
+                    <option value="groq">Groq API (Recommended — 100% Free Tier, Ultra Fast)</option>
+                    <option value="gemini">Google Gemini API (100% Free Tier, Multimodal)</option>
+                  </select>
+                </div>
+
+                <div id="groq-fields">
+                  <div class="form-group">
+                    <label class="form-label" for="setting-groq-key">
+                      Groq API Key
+                      <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="settings-link">Get Free Groq Key &rarr;</a>
+                    </label>
+                    <input type="password" id="setting-groq-key" class="form-control" placeholder="gsk_...">
+                    <small class="settings-hint">Free tier with high limits. Stored encrypted at rest.</small>
+                  </div>
+
+                  <div class="form-row-2col">
+                    <div class="form-group">
+                      <label class="form-label" for="setting-groq-model">Groq Text Model</label>
+                      <input type="text" id="setting-groq-model" class="form-control" value="llama-3.3-70b-versatile">
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label" for="setting-groq-vision-model">Groq Vision Model</label>
+                      <input type="text" id="setting-groq-vision-model" class="form-control" value="llama-3.2-11b-vision-preview">
+                    </div>
+                  </div>
+                </div>
+
+                <div id="gemini-fields" style="display: none;">
+                  <div class="form-group">
+                    <label class="form-label" for="setting-gemini-key">
+                      Google Gemini API Key
+                      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" class="settings-link">Get Free Gemini Key &rarr;</a>
+                    </label>
+                    <input type="password" id="setting-gemini-key" class="form-control" placeholder="AIzaSy...">
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="setting-gemini-model">Gemini Model</label>
+                    <input type="text" id="setting-gemini-model" class="form-control" value="gemini-1.5-flash">
+                  </div>
+                </div>
+              </section>
+
+              <!-- Section 2: Telegram Integration -->
+              <section class="settings-section-card">
+                <h3 class="settings-section-title settings-section-title-row">
+                  <span>2. Telegram Account &amp; Multi-Channel Listener</span>
+                  <span class="settings-chip settings-chip-green">Multi-Channel Harvester</span>
+                </h3>
+                <p class="settings-desc">
+                  Enter your Telegram API credentials from <a href="https://my.telegram.org/apps" target="_blank"
+                    rel="noopener">my.telegram.org</a>. Then click below to automatically load and select from all your
+                  joined channels and groups.
+                </p>
+
+                <div class="form-row-2col">
+                  <div class="form-group">
+                    <label class="form-label" for="setting-tg-api-id">Telegram API ID</label>
+                    <input type="text" id="setting-tg-api-id" class="form-control" placeholder="e.g. 21434478">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="setting-tg-phone">Telegram Phone</label>
+                    <input type="text" id="setting-tg-phone" class="form-control" placeholder="e.g. +1234567890">
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="setting-tg-api-hash">Telegram API Hash (AES-256 Encrypted)</label>
+                  <input type="password" id="setting-tg-api-hash" class="form-control"
+                    placeholder="••••••••••••••••••••••••••••••••">
+                </div>
+
+                <div class="dialogs-picker-wrap">
+                  <div class="dialogs-picker-top">
+                    <span class="dialogs-picker-title">Joined Channels &amp; Groups</span>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="fetchTelegramDialogs()"
+                      id="btn-fetch-dialogs">
+                      <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
+                      Fetch My Groups &amp; Channels
+                    </button>
+                  </div>
+
+                  <div id="tg-dialogs-container" class="dialogs-picker-container" style="display: none;">
+                    <!-- Populated dynamically via fetchTelegramDialogs() -->
+                  </div>
+                  <div id="tg-dialogs-empty" class="dialogs-empty">
+                    Click "Fetch My Groups &amp; Channels" to load your joined signal chats.
+                  </div>
+                </div>
+
+                <div class="modal-btn-row">
+                  <button type="button" class="btn btn-primary" onclick="startMultiClientListener()" id="btn-start-multi"
+                    style="flex: 1;">
+                    <i data-lucide="radio" style="width: 14px; height: 14px;"></i>
+                    Start Multi-Channel Listener
+                  </button>
+                  <button type="button" class="btn btn-secondary" onclick="stopTelegramBot()" id="btn-stop-bot">
+                    <i data-lucide="square" style="width: 14px; height: 14px;"></i>
+                    Stop Listener
+                  </button>
+                </div>
+
+                <div class="settings-subsection">
+                  <label class="form-label" for="setting-bot-token">Bot Token (Optional fallback for single test channel)</label>
+                  <input type="password" id="setting-bot-token" class="form-control" placeholder="123456:ABC-DEF...">
+                </div>
+              </section>
+
+              <!-- Section 3: XM MT5 Broker -->
+              <section class="settings-section-card">
+                <h3 class="settings-section-title settings-section-title-row">
+                  <span>3. XM MT5 Broker &amp; Automated Execution</span>
+                  <span class="settings-chip settings-chip-amber">Demo &amp; Live Supported</span>
+                </h3>
+
+                <div class="form-group xm-auto-row">
+                  <div>
+                    <div class="xm-auto-title">Autonomous XM MT5 Order Execution</div>
+                    <div class="xm-auto-desc">When ON, approved trades automatically fire in MT5 with strict SL and 1:1 scale-out trailing.</div>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-xm-auto" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <div class="form-row-2col">
+                  <div class="form-group">
+                    <label class="form-label" for="setting-xm-login">XM MT5 Login (Account ID)</label>
+                    <input type="number" id="setting-xm-login" class="form-control" placeholder="e.g. 346554725">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="setting-xm-server">XM Server Name</label>
+                    <input type="text" id="setting-xm-server" class="form-control" placeholder="e.g. XMGlobal-MT5 10">
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="setting-xm-password">
+                    XM MT5 Password
+                    <span class="settings-secure-note">🔒 Stored AES-256 Encrypted</span>
+                  </label>
+                  <input type="password" id="setting-xm-password" class="form-control" placeholder="••••••••••••">
+                </div>
+              </section>
+
+              <!-- Section 4: Hosting & Backend Tunnel -->
+              <section class="settings-section-card">
+                <h3 class="settings-section-title settings-section-title-row">
+                  <span>4. 24/7 Free Hosting &amp; Backend Tunnel</span>
+                  <span class="settings-chip settings-chip-blue">Vercel Bridge</span>
+                </h3>
+                <div class="form-group">
+                  <label class="form-label" for="setting-api-url">Backend Tunnel URL (Cloudflare Tunnel / Ngrok)</label>
+                  <input type="text" id="setting-api-url" class="form-control"
+                    placeholder="https://your-tunnel.trycloudflare.com">
+                  <div class="settings-hint">When hosting frontend on Vercel, enter your free Cloudflare Tunnel URL here. Automatically persists across refreshes.</div>
+                </div>
+              </section>
+
+              <!-- Section 5: Risk Management Parameters -->
+              <section class="settings-section-card">
+                <h3 class="settings-section-title settings-section-title-row">
+                  <span>5. Risk Management &amp; Lot Normalization</span>
+                  <span class="settings-chip settings-chip-green">Policy Active</span>
+                </h3>
+                <div class="risk-policy-grid">
+                  <div class="risk-policy-item">
+                    <div class="risk-policy-label">Gold (XAUUSD) Lot Size</div>
+                    <div class="risk-policy-val">0.02 Fixed</div>
+                  </div>
+                  <div class="risk-policy-item">
+                    <div class="risk-policy-label">Bitcoin (BTCUSD) Lot Size</div>
+                    <div class="risk-policy-val">0.04 Fixed</div>
+                  </div>
+                  <div class="risk-policy-item">
+                    <div class="risk-policy-label">Forex Pairs Lot Size</div>
+                    <div class="risk-policy-val">0.01 Standard</div>
+                  </div>
+                  <div class="risk-policy-item">
+                    <div class="risk-policy-label">1:1 Breakeven Trailing</div>
+                    <div class="risk-policy-val" style="color: var(--success-text);">50% Scale-Out + BE</div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+        </main>
       </div>
-    </main>
+    </div>
   </div>
 
 
   <!-- ============================================================
-       SYSTEM SETTINGS & INTEGRATIONS MODAL
+       QUICK SYSTEM SETTINGS MODAL
        ============================================================ -->
   <div class="modal-overlay" id="settings-modal" style="display: none;">
     <div class="modal-content modal-content-lg">
       <div class="modal-header">
         <div class="modal-title">
           <i data-lucide="sliders" style="width: 18px; height: 18px; color: var(--primary);"></i>
-          System Settings &amp; Integrations
+          Quick System Settings
         </div>
         <button class="close-btn" onclick="closeSettingsModal()" aria-label="Close">&times;</button>
       </div>
 
       <div class="modal-body">
-        <!-- Section 1: AI Provider -->
-        <section class="settings-section">
-          <h3 class="settings-section-title settings-section-blue">
-            1. Free AI Provider Configuration
-          </h3>
-
-          <div class="form-group">
-            <label class="form-label" for="setting-provider">Active AI Provider</label>
-            <select id="setting-provider" class="form-control" onchange="toggleProviderFields()">
-              <option value="groq">Groq API (Recommended — 100% Free Tier, Ultra Fast)</option>
-              <option value="gemini">Google Gemini API (100% Free Tier, Multimodal)</option>
-            </select>
-          </div>
-
-          <div id="groq-fields">
-            <div class="form-group">
-              <label class="form-label" for="setting-groq-key">
-                Groq API Key
-                <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="settings-link">Get Free
-                  Groq Key &rarr;</a>
-              </label>
-              <input type="password" id="setting-groq-key" class="form-control" placeholder="gsk_...">
-              <small class="settings-hint">Free tier with high limits. Stored encrypted at rest.</small>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="setting-groq-model">Groq Text Model</label>
-              <input type="text" id="setting-groq-model" class="form-control" value="llama-3.3-70b-versatile">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="setting-groq-vision-model">Groq Vision Model (for Chart Screenshots)</label>
-              <input type="text" id="setting-groq-vision-model" class="form-control"
-                value="llama-3.2-11b-vision-preview">
-            </div>
-          </div>
-
-          <div id="gemini-fields" style="display: none;">
-            <div class="form-group">
-              <label class="form-label" for="setting-gemini-key">
-                Google Gemini API Key
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener"
-                  class="settings-link">Get Free Gemini Key &rarr;</a>
-              </label>
-              <input type="password" id="setting-gemini-key" class="form-control" placeholder="AIzaSy...">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="setting-gemini-model">Gemini Model</label>
-              <input type="text" id="setting-gemini-model" class="form-control" value="gemini-1.5-flash">
-            </div>
-          </div>
-        </section>
-
-        <!-- Section 2: Telegram -->
-        <section class="settings-section">
-          <h3 class="settings-section-title settings-section-title-row">
-            <span>2. Telegram Account &amp; Multi-Channel Listener</span>
-            <span class="settings-chip settings-chip-green">Multi-Channel Harvester</span>
-          </h3>
-          <p class="settings-desc">
-            Enter your Telegram API credentials from <a href="https://my.telegram.org/apps" target="_blank"
-              rel="noopener">my.telegram.org</a>. Then click below to automatically load and select from all your
-            joined channels and groups.
-          </p>
-
-          <div class="form-row-2col">
-            <div class="form-group">
-              <label class="form-label" for="setting-tg-api-id">Telegram API ID</label>
-              <input type="text" id="setting-tg-api-id" class="form-control" placeholder="e.g. 12345678">
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="setting-tg-phone">Telegram Phone</label>
-              <input type="text" id="setting-tg-phone" class="form-control" placeholder="e.g. +1234567890">
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="setting-tg-api-hash">Telegram API Hash (AES-256 Encrypted)</label>
-            <input type="password" id="setting-tg-api-hash" class="form-control"
-              placeholder="••••••••••••••••••••••••••••••••">
-          </div>
-
-          <div class="dialogs-picker-wrap">
-            <div class="dialogs-picker-top">
-              <span class="dialogs-picker-title">Joined Channels &amp; Groups</span>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="fetchTelegramDialogs()"
-                id="btn-fetch-dialogs">
-                <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
-                Fetch My Groups &amp; Channels
-              </button>
-            </div>
-
-            <div id="tg-dialogs-container" class="dialogs-picker-container" style="display: none;">
-              <!-- Populated dynamically via fetchTelegramDialogs() -->
-            </div>
-            <div id="tg-dialogs-empty" class="dialogs-empty">
-              Click "Fetch My Groups &amp; Channels" to load your joined signal chats.
-            </div>
-          </div>
-
-          <div class="modal-btn-row">
-            <button class="btn btn-primary" onclick="startMultiClientListener()" id="btn-start-multi"
-              style="flex: 1;">
-              <i data-lucide="radio" style="width: 14px; height: 14px;"></i>
-              Start Multi-Channel Listener
-            </button>
-            <button class="btn btn-secondary" onclick="stopTelegramBot()" id="btn-stop-bot">
-              <i data-lucide="square" style="width: 14px; height: 14px;"></i>
-              Stop Listener
-            </button>
-          </div>
-
-          <div class="settings-subsection">
-            <label class="form-label" for="setting-bot-token">Bot Token (Optional fallback for single test
-              channel)</label>
-            <input type="password" id="setting-bot-token" class="form-control" placeholder="123456:ABC-DEF...">
-          </div>
-        </section>
-
-        <!-- Section 3: XM MT5 Broker -->
-        <section class="settings-section">
-          <h3 class="settings-section-title settings-section-title-row">
-            <span>3. XM MT5 Broker &amp; Automated Execution</span>
-            <span class="settings-chip settings-chip-amber">Demo &amp; Live Supported</span>
-          </h3>
-
-          <div class="form-group xm-auto-row">
-            <div>
-              <div class="xm-auto-title">Autonomous XM MT5 Order Execution</div>
-              <div class="xm-auto-desc">When ON, approved trades automatically fire in MT5 with strict SL and 1:1
-                scale-out trailing.</div>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="setting-xm-auto" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-
-          <div class="form-row-2col">
-            <div class="form-group">
-              <label class="form-label" for="setting-xm-login">XM MT5 Login (Account ID)</label>
-              <input type="number" id="setting-xm-login" class="form-control" placeholder="e.g. 346554725">
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="setting-xm-server">XM Server Name</label>
-              <input type="text" id="setting-xm-server" class="form-control" placeholder="e.g. XMGlobal-MT5 10">
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="setting-xm-password">
-              XM MT5 Password
-              <span class="settings-secure-note">🔒 Stored AES-256 Encrypted</span>
-            </label>
-            <input type="password" id="setting-xm-password" class="form-control" placeholder="••••••••••••">
-          </div>
-        </section>
-
-        <!-- Section 4: Hosting & Backend Bridge -->
-        <section class="settings-section">
-          <h3 class="settings-section-title settings-section-title-row">
-            <span>4. 24/7 Free Hosting &amp; Backend Tunnel</span>
-            <span class="settings-chip settings-chip-blue">Vercel Bridge</span>
-          </h3>
-          <div class="form-group">
-            <label class="form-label" for="setting-api-url">Backend Tunnel URL (Cloudflare Tunnel / Ngrok)</label>
-            <input type="text" id="setting-api-url" class="form-control"
-              placeholder="https://your-tunnel.trycloudflare.com">
-            <div class="settings-hint">When hosting the frontend on Vercel, enter your free Cloudflare Tunnel URL here.
-              Automatically persists across refreshes.</div>
-          </div>
-        </section>
+        <p class="settings-desc">You can configure full settings directly in the Settings page or save quick connection settings here.</p>
+        <button class="btn btn-secondary w-full" style="margin-bottom: 1rem;" onclick="closeSettingsModal(); switchDashboardPage('settings');">
+          <i data-lucide="sliders" style="width: 14px; height: 14px;"></i>
+          Open Full Settings Dashboard
+        </button>
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeSettingsModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveSettings()">Save Configuration</button>
+        <button class="btn btn-secondary" onclick="closeSettingsModal()">Close</button>
       </div>
     </div>
   </div>
 
-  <!-- JSON Raw Inspection Modal -->
+  <!-- RAW JSON INSPECTION MODAL -->
   <div class="modal-overlay" id="json-modal" style="display: none;">
     <div class="modal-content modal-content-lg">
       <div class="modal-header">
@@ -734,7 +1130,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=26"></script>
+  <script src="./app.js?v=30"></script>
 </body>
 
 </html>
