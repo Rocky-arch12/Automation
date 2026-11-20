@@ -236,23 +236,21 @@ class XMExecutionEngine:
         action: str,
         entry: Optional[float],
         sl: Optional[float],
-        tp_levels: List[Any]
+        tp_levels: Optional[List[Any]] = None
     ) -> Tuple[bool, Optional[float], Optional[float], str]:
         """
         USER MANDATORY RULES:
-        - Stop Loss (SL) and Take Profit (TP) are STRICTLY MANDATORY.
-        - NEVER execute trades without both valid SL and TP.
-        - Verify SL and TP are on the proper sides of the Entry price.
+        - Stop Loss (SL) is STRICTLY COMPULSORY.
+        - Entry / CMP is OPTIONAL (executed at live market price if omitted).
+        - Take Profit (TP) is OPTIONAL (order executed without TP / tp=0.0 if omitted).
         """
         is_buy = "BUY" in action.upper() or "LONG" in action.upper()
 
-        if entry is None or entry <= 0:
-            return False, None, None, "REJECTED: Missing or invalid entry price."
-
+        # Stop Loss is strictly mandatory
         if sl is None or sl <= 0:
-            return False, None, None, "REJECTED: Missing Stop Loss (SL). Proper SL is strictly mandatory."
+            return False, None, None, "REJECTED: Missing Stop Loss (SL). Stop Loss is strictly mandatory."
 
-        # Extract TP
+        # Extract TP if available (optional)
         extracted_tp = None
         if tp_levels and len(tp_levels) > 0:
             try:
@@ -262,20 +260,14 @@ class XMExecutionEngine:
             except Exception:
                 pass
 
-        if extracted_tp is None:
-            return False, None, None, "REJECTED: Missing Take Profit (TP). Proper TP is strictly mandatory."
-
-        # Verify SL is on correct side of Entry
-        if is_buy and sl >= entry:
-            return False, None, None, f"REJECTED: Invalid SL ({sl}) for BUY order (must be below entry {entry})."
-        if not is_buy and sl <= entry:
-            return False, None, None, f"REJECTED: Invalid SL ({sl}) for SELL order (must be above entry {entry})."
-
-        # Verify TP is on correct side of Entry
-        if is_buy and extracted_tp <= entry:
-            return False, None, None, f"REJECTED: Invalid TP ({extracted_tp}) for BUY order (must be above entry {entry})."
-        if not is_buy and extracted_tp >= entry:
-            return False, None, None, f"REJECTED: Invalid TP ({extracted_tp}) for SELL order (must be below entry {entry})."
+        # If entry is provided and > 0, verify orientations
+        if entry is not None and entry > 0:
+            # If TP is inverted relative to entry, drop TP rather than rejecting execution
+            if extracted_tp is not None:
+                if is_buy and extracted_tp <= entry:
+                    extracted_tp = None
+                elif not is_buy and extracted_tp >= entry:
+                    extracted_tp = None
 
         return True, sl, extracted_tp, "VALID"
 
@@ -389,17 +381,17 @@ class XMExecutionEngine:
         entry_nums = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', entry_raw_str)]
         if len(entry_nums) >= 2 and any(sep in entry_raw_str for sep in ["-", "/", "TO", "to"]):
             entry = round((entry_nums[0] + entry_nums[1]) / 2.0, 2)
-        elif len(entry_nums) >= 1:
+        elif len(entry_nums) >= 1 and entry_nums[0] > 0:
             entry = entry_nums[0]
         else:
-            entry = 2642.0 if "XAU" in xm_symbol or "GOLD" in xm_symbol else 68500.0
+            entry = None
 
         sl_nums = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', str(trade_data.get("sl") or "0").replace(",", ""))]
         sl_val = sl_nums[0] if sl_nums else None
 
         tp_levels = trade_data.get("tp_levels") or []
 
-        # MANDATORY SAFETY GUARD: Check proper SL and TP
+        # MANDATORY SAFETY GUARD: Check Stop Loss (SL is strictly compulsory; Entry & TP are optional)
         is_valid, final_sl, final_tp, val_msg = self.validate_and_enforce_sl_tp(
             symbol=xm_symbol,
             action=action_raw,
@@ -421,11 +413,29 @@ class XMExecutionEngine:
                 "ticket": None
             }
 
+        # If entry was omitted, retrieve live tick from MT5 or estimate from SL
+        if entry is None or entry <= 0:
+            if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
+                try:
+                    tick = mt5.symbol_info_tick(xm_symbol)
+                    if tick:
+                        entry = tick.ask if is_buy else tick.bid
+                except Exception:
+                    pass
+            if entry is None or entry <= 0:
+                if "XAU" in xm_symbol or "GOLD" in xm_symbol:
+                    entry = round(final_sl + 5.0, 2) if is_buy else round(final_sl - 5.0, 2)
+                elif "BTC" in xm_symbol:
+                    entry = round(final_sl + 200.0, 2) if is_buy else round(final_sl - 200.0, 2)
+                else:
+                    entry = round(final_sl * 1.002, 4) if is_buy else round(final_sl * 0.998, 4)
+
         # Calculate strict lot size
         lot_size = self.calculate_lot_size(xm_symbol, entry, final_sl)
 
         trade_id = trade_data.get("trade_id")
-        notes = f"XM Order: {action_raw} {lot_size} lots on {xm_symbol} @ {entry}. SL: {final_sl}, 1:1 TP: {final_tp}"
+        tp_display = final_tp if final_tp is not None else "Open (No TP)"
+        notes = f"XM Order: {action_raw} {lot_size} lots on {xm_symbol} @ {entry}. SL: {final_sl}, TP: {tp_display}"
 
         # 1. LIVE MT5 EXECUTION
         if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
@@ -450,19 +460,21 @@ class XMExecutionEngine:
 
                 # Ensure SL & TP are strictly aligned with live market execution price to avoid 10016 (Invalid Stops)
                 order_sl = float(final_sl)
-                order_tp = float(final_tp)
-                risk_dist = abs(entry - final_sl) if entry and final_sl else 10.0
+                order_tp = float(final_tp) if (final_tp is not None and float(final_tp) > 0) else 0.0
+                risk_dist = abs(price - final_sl) if final_sl else 10.0
                 if risk_dist <= 0:
-                    risk_dist = 10.0
+                    risk_dist = 5.0
 
                 if is_buy:
-                    if order_sl >= price or order_tp <= price:
+                    if order_sl >= price:
                         order_sl = round(price - risk_dist, digits)
-                        order_tp = round(price + risk_dist, digits)
+                    if order_tp > 0.0 and order_tp <= price:
+                        order_tp = 0.0
                 else:
-                    if order_sl <= price or order_tp >= price:
+                    if order_sl <= price:
                         order_sl = round(price + risk_dist, digits)
-                        order_tp = round(price - risk_dist, digits)
+                    if order_tp > 0.0 and order_tp >= price:
+                        order_tp = 0.0
 
                 # Resolve filling mode supported by symbol (IOC vs FOK vs Return)
                 filling = mt5.ORDER_FILLING_IOC
@@ -498,7 +510,7 @@ class XMExecutionEngine:
                     await log_event(
                         "SIGNAL", "XM_EXECUTION",
                         f"SUCCESS: XM MT5 Order #{ticket} FILLED - {action_raw} {lot_size} {xm_symbol} @ {price_or_err}",
-                        details=f"Trade {trade_id} -> SL: {final_sl}, 1:1 TP: {final_tp}"
+                        details=f"Trade {trade_id} -> SL: {final_sl}, TP: {tp_display}"
                     )
                     await self._record_execution(trade_id, ticket, xm_symbol, action_raw, lot_size, price_or_err, final_sl, final_tp, "FILLED")
                     return {
@@ -514,17 +526,30 @@ class XMExecutionEngine:
                     }
                 else:
                     err_msg = getattr(result, "comment", None) if result else str(price_or_err)
-                    await log_event("WARNING", "XM_EXECUTION", f"XM live MT5 order not placed for {trade_id}: {err_msg}. Operating in Demo Sandbox.")
+                    retcode = getattr(result, "retcode", "ERROR") if result else "FAILED"
+                    await log_event("ERROR", "XM_EXECUTION", f"XM live MT5 order REJECTED for {trade_id}: [{retcode}] {err_msg}")
+                    return {
+                        "success": False,
+                        "status": "MT5_REJECTED",
+                        "message": f"MT5 Order Rejected: [{retcode}] {err_msg}",
+                        "ticket": None
+                    }
             except Exception as e:
-                await log_event("WARNING", "XM_EXECUTION", f"MT5 exception on {trade_id}: {str(e)}. Operating in Demo Sandbox.")
+                await log_event("ERROR", "XM_EXECUTION", f"MT5 exception on {trade_id}: {str(e)}")
+                return {
+                    "success": False,
+                    "status": "MT5_ERROR",
+                    "message": f"MT5 Execution Error: {str(e)}",
+                    "ticket": None
+                }
 
-        # 2. XM DEMO SIMULATION (Runs when MT5 terminal not yet running or during testing)
+        # 2. XM DEMO SIMULATION (Runs when MT5 terminal not connected or in sandbox)
         import random
         sim_ticket = random.randint(70000000, 79999999)
         await log_event(
             "SIGNAL", "XM_EXECUTION",
             f"[XM DEMO] Order #{sim_ticket} Executed: {action_raw} {lot_size} lots on {xm_symbol} @ {entry}",
-            details=f"SL: {final_sl} | 1:1 TP: {final_tp} | Rules: Gold={self.GOLD_LOTS}, BTC={self.BTC_LOTS}, Other Max Risk=${self.MAX_RISK_USD}"
+            details=f"SL: {final_sl} | TP: {tp_display} | Rules: Gold={self.GOLD_LOTS}, BTC={self.BTC_LOTS}, Other Max Risk=${self.MAX_RISK_USD}"
         )
         await self._record_execution(trade_id, sim_ticket, xm_symbol, action_raw, lot_size, entry, final_sl, final_tp, "DEMO_FILLED")
 

@@ -9,7 +9,7 @@ import numpy as np
 
 def process_and_encode_image(image_path: str, max_dimension: int = 1280) -> Tuple[str, str]:
     """
-    Loads, optimizes, and encodes an image to base64 for Groq or Gemini vision models.
+    Loads, optimizes, and encodes an image to base64 for Groq multimodal vision model (qwen/qwen3.8-27b).
     """
     path = Path(image_path)
     if not path.exists():
@@ -32,9 +32,8 @@ def process_and_encode_image(image_path: str, max_dimension: int = 1280) -> Tupl
 
 def analyze_chart_with_cv(image_path: str) -> Optional[Dict[str, Any]]:
     """
-    Computer Vision analyzer for TradingView & MT4/MT5 charts.
-    Detects TradingView Long/Short Position tools (green/red zones),
-    determines trade direction, entry/SL/TP zones, and candle progress.
+    Fast Computer Vision pre-analyzer for TradingView charts.
+    Detects TradingView Long/Short Position tools (green/red zones) to assist Groq Vision.
     """
     if not image_path or not os.path.exists(image_path):
         return None
@@ -55,8 +54,7 @@ def analyze_chart_with_cv(image_path: str) -> Optional[Dict[str, Any]]:
         green_pixels = np.sum(green_dom)
         red_pixels = np.sum(red_dom)
 
-        # If significant green and red rectangular zones exist, it's a TradingView Position Setup
-        if green_pixels > 2000 and red_pixels > 1500:
+        if green_pixels > 1200 and red_pixels > 1000:
             gy, gx = np.where(green_dom)
             ry, rx = np.where(red_dom)
 
@@ -67,18 +65,14 @@ def analyze_chart_with_cv(image_path: str) -> Optional[Dict[str, Any]]:
             # If Green is at smaller Y (higher up on chart), it's a LONG (BUY) position!
             # If Red is at smaller Y (higher up on chart), it's a SHORT (SELL) position!
             is_long = bool(mean_gy < mean_ry)
-
             action = "BUY" if is_long else "SELL"
-            dividing_y = int((np.max(gy) + np.min(ry)) / 2) if is_long else int((np.max(ry) + np.min(gy)) / 2)
 
             return {
                 "detected": True,
                 "tool": "TradingView Position Tool",
                 "action": action,
                 "is_long": is_long,
-                "tp_zone": "Top Green Boundary" if is_long else "Bottom Green Boundary",
-                "sl_zone": "Bottom Red Boundary" if is_long else "Top Red Boundary",
-                "entry_zone": f"Dividing level at Y={dividing_y}",
+                "symbol": "XAUUSD",
                 "green_pixels": int(green_pixels),
                 "red_pixels": int(red_pixels)
             }

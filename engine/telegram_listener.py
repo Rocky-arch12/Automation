@@ -74,7 +74,22 @@ class TelegramListenerManager:
                 merged_media_path = existing.get("media_path") or media_path
                 merged_media_type = existing.get("media_type") if existing.get("media_path") else media_type
 
-                # If we now have BOTH text and photo:
+                # Check if text contains trade parameters (SL, Entry, or numbers)
+                has_numbers = bool(re.search(r'\d+', merged_text))
+                is_active_lead = any(k in merged_text.upper() for k in ["ACTIVE TRADE", "ACTIVE SELLING", "ACTIVE NOW", "ACTIVE"])
+
+                # If we have both text and photo, but text is just "Active trade" without numbers yet,
+                # give a brief 3.5s window for parameter text (e.g. Entry-XXXX Sl-XXXX) to arrive
+                if merged_text and merged_media_path and is_active_lead and not has_numbers:
+                    existing["text"] = merged_text
+                    existing["media_path"] = merged_media_path
+                    existing["media_type"] = merged_media_type
+                    existing["timer_task"] = asyncio.create_task(
+                        self._flush_buffer_after_delay(channel_id, delay=3.5)
+                    )
+                    return
+
+                # If we have both text and photo (or parameters arrived):
                 if merged_text and merged_media_path:
                     del self._pending_buffers[channel_id]
                     # Immediately process the coalesced unified message
@@ -89,19 +104,22 @@ class TelegramListenerManager:
                     ))
                     return
 
-                # If still only text or only media, refresh buffer and schedule flush in 2.5s
+                # If still only text or only media, refresh buffer and schedule flush in 3.0s
                 existing["text"] = merged_text
                 existing["media_path"] = merged_media_path
                 existing["media_type"] = merged_media_type
                 existing["timer_task"] = asyncio.create_task(
-                    self._flush_buffer_after_delay(channel_id, delay=2.5)
+                    self._flush_buffer_after_delay(channel_id, delay=3.0)
                 )
                 return
 
             # If no existing pending message in buffer:
-            # If the message ALREADY has both meaningful text and photo (e.g. photo with caption)
-            if (text and text.strip()) and media_path:
-                # Already complete! Process directly
+            # If the message ALREADY has both meaningful text with numbers and photo
+            has_numbers = bool(re.search(r'\d+', text or ""))
+            is_active_lead = any(k in (text or "").upper() for k in ["ACTIVE TRADE", "ACTIVE SELLING", "ACTIVE NOW", "ACTIVE"])
+
+            if (text and text.strip()) and media_path and (has_numbers or not is_active_lead):
+                # Already complete with parameters! Process directly
                 asyncio.create_task(self.process_incoming_message(
                     channel_id=channel_id,
                     channel_title=channel_title,
@@ -113,7 +131,7 @@ class TelegramListenerManager:
                 ))
                 return
 
-            # Put in buffer and wait up to 2.5 seconds for a companion text/photo to arrive
+            # Put in buffer and wait up to 3.0 seconds for a companion text/photo to arrive
             buf_item = {
                 "channel_id": channel_id,
                 "channel_title": channel_title,
@@ -124,7 +142,7 @@ class TelegramListenerManager:
                 "source": source
             }
             buf_item["timer_task"] = asyncio.create_task(
-                self._flush_buffer_after_delay(channel_id, delay=2.5)
+                self._flush_buffer_after_delay(channel_id, delay=3.0)
             )
             self._pending_buffers[channel_id] = buf_item
 

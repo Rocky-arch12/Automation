@@ -525,7 +525,9 @@ function renderFeed(messages) {
 function getOutcomeBadgeClass(status) {
   const map = {
     'PENDING': 'badge-pending',
+    'PENDING_AWAITING_PARAMS': 'badge-pending',
     'EXECUTED': 'badge-executed',
+    'FAILED_EXECUTION': 'badge-sl-hit',
     'CANCELLED': 'badge-cancelled',
     'SL_HIT': 'badge-sl-hit',
     'TP_HIT': 'badge-tp-hit',
