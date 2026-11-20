@@ -23,10 +23,11 @@ The channel owner frequently publishes signals in the following real-world patte
 3. Take Profit (TP) is OPTIONAL:
    - If the owner only provides Stop Loss (SL) without TP, execute with SL ("tp": null). Only Stop Loss (SL) is strictly compulsory!
 
-4. Direction (BUY vs SELL) Inference:
-   - If BUY or SELL is not explicitly written in text, deduce direction:
-     * If SL < Entry (or SL < TP) -> BUY (Long)
-     * If SL > Entry (or SL > TP) -> SELL (Short)
+4. Direction (BUY vs SELL) Inference (MANDATORY MATHEMATICAL LAW):
+   - In trading, Stop Loss (SL) and Entry/Take Profit (TP) define direction mathematically:
+     * If SL > Entry or SL > TP (SL is HIGHER than entry/target) -> IT IS ALWAYS A SELL (Short). NEVER classify as BUY!
+     * If SL < Entry or SL < TP (SL is LOWER than entry/target) -> IT IS ALWAYS A BUY (Long). NEVER classify as SELL!
+     * If BUY or SELL is not explicitly written in text, use this mathematical rule above!
      * If recent message says "Active selling trade" or "Sell level" -> SELL
      * If recent message says "Active buying trade" -> BUY
 
@@ -171,10 +172,11 @@ def build_context_prompt(
     # 4. Current Message to Classify
     lines.append("CURRENT INCOMING MESSAGE TO CLASSIFY:")
     lines.append(f"Text: \"{text or '[Chart Screenshot Broadcast]'}\"")
-    if current_cv_info and current_cv_info.get("detected"):
-        dir_str = "BUY (Long)" if current_cv_info.get("is_long") else "SELL (Short)"
-        lines.append(f"Attached Chart Visual Tool: {dir_str} position detected on {current_cv_info.get('symbol', 'XAUUSD')}.")
-        lines.append("CRITICAL: Extract the Stop Loss (red label), Entry (gray label), and Take Profit (green/cyan label) from the right-hand vertical price axis labels of the TradingView position tool.")
+    if current_cv_info:
+        lines.append("Attached Chart Screenshot: Inspect the TradingView Long/Short Position Tool and right-hand price axis labels.")
+        lines.append("- Visual Tool Rule: Red box on TOP / Green box on BOTTOM = SELL (Short). Green box on TOP / Red box on BOTTOM = BUY (Long).")
+        lines.append("- Mathematical Price Rule: If SL > Entry or SL > TP -> Action MUST be SELL. If SL < Entry or SL < TP -> Action MUST be BUY.")
+        lines.append("CRITICAL: Extract the Stop Loss (red label), Entry (gray label), and Take Profit (green/cyan label) from the right-hand vertical price axis labels.")
 
     return "\n".join(lines)
 
@@ -290,13 +292,9 @@ def classify_with_context_heuristic(
     # Determine Action (BUY vs SELL)
     has_buy = "BUY" in t or "LONG" in t
     has_sell = "SELL" in t or "SHORT" in t
-    if has_sell:
+    if has_sell and not has_buy:
         action = "SELL"
-    elif has_buy:
-        action = "BUY"
-    elif history_has_selling:
-        action = "SELL"
-    elif history_has_buying:
+    elif has_buy and not has_sell:
         action = "BUY"
     elif entry_val and sl_val:
         # Mathematical deduction: SL < Entry -> BUY, SL > Entry -> SELL
@@ -314,6 +312,10 @@ def classify_with_context_heuristic(
             action = "BUY" if s_f < t_f else "SELL"
         except Exception:
             action = "BUY"
+    elif history_has_selling:
+        action = "SELL"
+    elif history_has_buying:
+        action = "BUY"
     elif image_cv and image_cv.get("detected"):
         action = image_cv.get("action", "BUY")
     else:
@@ -495,8 +497,8 @@ async def analyze_message_with_ai(
         if candidate.exists():
             resolved_path = str(candidate)
 
-    # Pre-analyze image with CV if present
-    cv_info = analyze_chart_with_cv(resolved_path) if resolved_path else None
+    # Image presence flag for multimodal context
+    cv_info = {"has_image": True} if resolved_path else None
 
     # Context Prompt with history and trades
     user_context_prompt = build_context_prompt(
@@ -709,17 +711,34 @@ def _normalize_ai_response(
     else:
         tp_levels = [str(x).replace(",", "") for x in tp_levels if x is not None]
 
-    # Math consistency check between SL and TP
-    if sl and tp_levels:
+    # Mathematical direction verification (immutable trading law)
+    # Never swap user SL and TP! Instead, verify and enforce the correct direction (BUY vs SELL).
+    if sl:
         try:
             sl_f = float(sl)
+            ref_f = float(entry_price) if entry_price else (float(tp_levels[0]) if tp_levels else None)
+            if ref_f is not None and ref_f > 0:
+                if sl_f > ref_f:
+                    # SL is above Entry / TP -> In all financial markets this is unequivocally SELL (Short)
+                    if action != "SELL":
+                        action = "SELL"
+                elif sl_f < ref_f:
+                    # SL is below Entry / TP -> In all financial markets this is unequivocally BUY (Long)
+                    if action != "BUY":
+                        action = "BUY"
+        except Exception:
+            pass
+
+    # Also verify TP direction relative to entry price if entry is present
+    if entry_price and tp_levels:
+        try:
+            ent_f = float(entry_price)
             tp_f = float(tp_levels[0])
-            if action == "SELL" and sl_f < tp_f:
-                # Swapped by vision model! Correct it
-                sl, tp_levels[0] = str(tp_f), str(sl_f)
-            elif action == "BUY" and sl_f > tp_f:
-                # Swapped by vision model! Correct it
-                sl, tp_levels[0] = str(tp_f), str(sl_f)
+            if ent_f > 0 and tp_f > 0:
+                if tp_f < ent_f and action == "BUY":
+                    action = "SELL"
+                elif tp_f > ent_f and action == "SELL":
+                    action = "BUY"
         except Exception:
             pass
 
