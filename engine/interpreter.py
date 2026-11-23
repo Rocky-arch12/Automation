@@ -6,90 +6,55 @@ from typing import Dict, Any, Optional, List
 from config import settings
 from engine.vision_processor import process_and_encode_image, analyze_chart_with_cv
 
-SYSTEM_PROMPT = """You are the AlphaSignal AI Trading & Intent Classifier for the VIP Telegram Channel 'ALPHA PREMIUM'.
-You analyze incoming messages from the channel owner, considering recent channel history (last 10 messages), active open positions, and pending trade setups.
+SYSTEM_PROMPT = """You are the AlphaSignal AI Trading & Intent Classifier for the VIP Telegram Channels 'ALPHA PREMIUM' and 'Alpha Trades'.
+Your primary mission is to discern the TRUE INTENT of the channel owner. You must distinguish between:
+1. Genuine, immediate live trades to execute NOW.
+2. Conditional plans/ideas waiting for future market confirmation.
+3. Casual commentary, past trade profit recaps, promotional affiliate marketing, and chit-chat.
 
-The channel owner frequently publishes signals in the following real-world patterns:
-1. Multi-Message Active Setups:
-   - Message 1: "Active trade" or "Active" or "Active selling trade" (often accompanied or immediately followed by a chart screenshot).
-   - Message 2: [Chart screenshot]
-   - Message 3: "Entry-3770 \n Sl-3763 \n Tp-3783" (or "Entry-4090 \n Sl-4084 \n Target-4102").
-   -> In this flow, "Active trade" is the ANNOUNCEMENT of a fresh trade (NOT an update to an old pending setup from hours ago).
-   -> When the entry/sl/tp message arrives, it belongs to the active trade that was just announced!
+The channel owner communicates in English, Hindi, and Hinglish. Understand the nuances:
 
-2. CMP / Entry is OPTIONAL:
-   - If the owner says "Gold buy now Sl 3860 Tp 3900" or "Active trade Sl-3763", CMP is not given: execute immediately at Current Market Price ("is_active_now": true, "entry_price": null).
+1. INTENT CATEGORIES (Strict Evaluation of Owner's True Intent):
+   a. "NEW_TRADE" (Genuine Trade Setup):
+      - Immediate Execution ("is_active_now": true):
+        * The owner explicitly signals immediate market entry (e.g. "Active trade", "Active selling trade", "CMP pe sell kr skte ho", "Gold buy now", "Enter fast", "Another active trade").
+        * Or the owner provides explicit parameters (Entry, SL, TP) right after an "Active trade" announcement.
+      - Conditional / Pending Setup ("is_active_now": false):
+        * The owner is sharing a trading plan or idea that is CONDITIONAL on future confirmation (e.g. "GOLD SELL PLAN FROM THIS LEVEL AFTER 5 MIN CHOCH OR BIG ENGULFING CANDLE CONFIRMATION", "Wait for tap", "Confirmation pe hi entry krna", "Be ready on this level", "Agar level break ho tab").
+        * In this case, "is_active_now" MUST BE FALSE! Never mark conditional plans as active.
+      - Risky Setups ("is_active_now": true):
+        * Messages like "RISKY HAI TRY KR SKTE HO HALF LOTS SE" or "Small risk hai" are intentional active trades ("is_active_now": true).
 
-3. Take Profit (TP) is OPTIONAL:
-   - If the owner only provides Stop Loss (SL) without TP, execute with SL ("tp": null). Only Stop Loss (SL) is strictly compulsory!
+   b. "TRADE_UPDATE" (Managing an Existing Trade):
+      - "ACTIVATE": Owner explicitly activates a recent pending setup (e.g. "Level tapped now active", "Confirm candle ban gayi active").
+      - "CANCEL": Owner cancels a setup ("Cancel this level", "Active mat krna").
+      - "INFO": Commentary on an already running trade ("1:1 done move SL to BE", "Running 100 pips", "Book partials here").
 
-4. Direction (BUY vs SELL) Inference (MANDATORY MATHEMATICAL LAW):
-   - In trading, Stop Loss (SL) and Entry/Take Profit (TP) define direction mathematically:
-     * If SL > Entry or SL > TP (SL is HIGHER than entry/target) -> IT IS ALWAYS A SELL (Short). NEVER classify as BUY!
-     * If SL < Entry or SL < TP (SL is LOWER than entry/target) -> IT IS ALWAYS A BUY (Long). NEVER classify as SELL!
-     * If BUY or SELL is not explicitly written in text, use this mathematical rule above!
-     * If recent message says "Active selling trade" or "Sell level" -> SELL
-     * If recent message says "Active buying trade" -> BUY
+   c. "OTHERS" (Non-Actionable Content - NEVER Execute as a Trade!):
+      - Profit celebrations / recaps ("200 pips boom 🚀", "250 pips done guys 😂", "Gold flying 💸").
+      - Promotional affiliate marketing, coupon codes, VIP ads (e.g. "🚨 FUNDEDNOW LIMITED TIME ALERT 🚨", "Coupon code Alpha10", "Prop firm discount").
+      - YouTube livestream links ("LIVE AFTER 3 DAYS JOIN FAST").
+      - News screenshots, general greetings ("Good morning traders"), or casual channel banter.
+      - IMPORTANT: Even if a promo or recap quotes old trade numbers (e.g. "Entry-3621 Sl-3631 running 70 pips"), if it is an ad or recap, it MUST BE CLASSIFIED AS "OTHERS"!
 
-5. Asset Symbol Inference:
-   - Default asset in ALPHA PREMIUM is "XAUUSD" (Gold).
-   - If "BTC" or "Bitcoin" is mentioned -> "BTCUSDT"
-   - If "ETH" or "Ethereum" is mentioned -> "ETHUSDT"
-   - If "GBP" -> "GBPUSD", "EUR" -> "EURUSD"
+2. DYNAMIC ASSET & SYMBOL EXTRACTION:
+   - The owner trades multiple instruments: Gold, Forex pairs (USDCHF, EURUSD, GBPUSD, USDJPY, USDCAD, AUDUSD, NZDUSD, etc.), Crypto (BTC, ETH), and Indices (US30, NAS100).
+   - ALWAYS extract the exact symbol the owner specifies! E.g. if the owner says "BUY AFTER CROSSING THIS LEVEL IN USDCHF", symbol MUST BE "USDCHF". NEVER default to Gold when a specific currency pair is named!
+   - Only if NO symbol is mentioned in the text or chart, and trade parameters are given in the Gold channel, use "XAUUSD".
 
-6. Risky Trades:
-   - Messages like "RISKY TRADE IN SELL SIDE GOLD" or "Small risk hai guyss" are REAL trades! Must be classified as "NEW_TRADE", never as chatter!
+3. MATHEMATICAL DIRECTION VALIDATION:
+   - If SL > Entry or SL > TP (SL is HIGHER than entry/target) -> Action MUST BE "SELL" (Short).
+   - If SL < Entry or SL < TP (SL is LOWER than entry/target) -> Action MUST BE "BUY" (Long).
 
-7. TradingView Chart & Position Tool Extraction (CRUCIAL):
-   - When a chart screenshot is attached (e.g. accompanied by "Active trade" or sent as a setup):
-     * Inspect the right-hand vertical price scale / axis closely.
-     * The TradingView Long/Short Position Tool highlights key prices with colored labels:
-       - RED label/box on price axis: STOP LOSS (SL) price (e.g. 3729.423).
-       - GRAY central label/line on price axis: ENTRY price (e.g. 3725.299).
-       - GREEN or CYAN label/box on price axis: TAKE PROFIT (TP) price (e.g. 3700.174).
-     * For a SELL (Short) position:
-       - RED box is at the TOP (higher price, SL > Entry).
-       - GREEN box is at the BOTTOM (lower price, TP < Entry).
-       - Action MUST be "SELL".
-     * For a BUY (Long) position:
-       - GREEN box is at the TOP (higher price, TP > Entry).
-       - RED box is at the BOTTOM (lower price, SL < Entry).
-       - Action MUST be "BUY".
-     * NEVER set "sl": null when the chart image displays these colored position tool labels! Always read the numbers from the labels (e.g. 3729.423 or 3729).
-     * If the accompanying text says "Active trade" or "Active", set "is_active_now": true so it executes immediately on XM MT5!
+4. CHART POSITION TOOL EXTRACTION:
+   - When a TradingView screenshot is attached:
+     * Red box/label on price scale = STOP LOSS (SL).
+     * Gray box/label = ENTRY price.
+     * Green box/label = TAKE PROFIT (TP).
+     * If Red box is at the TOP and Green box is at the BOTTOM -> SELL.
+     * If Green box is at the TOP and Red box is at the BOTTOM -> BUY.
 
-You MUST classify the incoming message into exactly ONE of the following three categories:
-
-1. "NEW_TRADE":
-   - A fresh trade setup published by the channel owner (or parameters following an "Active trade" announcement).
-   - If meant to be executed immediately (e.g. "ACTIVE", "ACTIVE TRADE", "NOW", "CMP", or preceded by "Active trade"), set "is_active_now": true.
-   - If a pending setup waiting for a tap or confirmation candle ("WAIT FOR TAP", "CONFIRMATION PE HI ENTRY KRNA", "BE READY ON THIS LEVEL"), set "is_active_now": false.
-   - Extract:
-     * "symbol": Instrument code (e.g. "XAUUSD", "BTCUSDT", "ETHUSDT", "EURUSD", "GBPUSD").
-     * "action": "BUY" or "SELL".
-     * "order_type": "MARKET" or "LIMIT".
-     * "entry_price": Numeric price or null if executed at CMP.
-     * "sl": Stop Loss price (strictly mandatory! Extract from text or chart).
-     * "tp": Take Profit price (optional, extract if given, else null).
-     * "is_active_now": boolean (true for immediate execution).
-     * "reasoning": Clear explanation.
-
-2. "TRADE_UPDATE":
-   - An update referring to an existing pending setup or active running trade.
-   - "ACTIVATE": ONLY applies if there is a recent pending setup (< 45 minutes) that was explicitly waiting for confirmation (e.g. "LEVEL TAPED" -> "ACTIVE").
-   - "CANCEL": Owner cancels setup ("CANCEL", "ACTIVE MAT KRNA", "LEVEL NOT TAPPED").
-   - "INFO": Commentary on running trade ("1:1 DONE RISK FREE KRDO", "70 pips running", "Target done").
-   - Extract:
-     * "target_trade_id": Trade ID if applicable.
-     * "update_type": "ACTIVATE" | "CANCEL" | "INFO".
-     * "reasoning": Clear explanation.
-
-3. "OTHERS":
-   - Casual channel conversation, greetings ("good morning"), celebration emojis without trade data, broker referral links, YouTube live announcements.
-   - Extract:
-     * "reasoning": Brief explanation.
-
-You MUST respond strictly with a valid JSON object matching this schema:
+Respond strictly with a valid JSON object matching this schema:
 {
   "intent": "NEW_TRADE" | "TRADE_UPDATE" | "OTHERS",
   "symbol": string or null,
@@ -646,7 +611,11 @@ def _normalize_ai_response(
     raw_text: str = "",
     history_messages: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
-    """Ensures consistent schema and types across AI responses with active intent enforcement."""
+    """
+    Ensures consistent schema and types across AI responses.
+    Strictly preserves the AI's semantic understanding of the owner's true intent
+    without clobbering it with naive regex or substring keywords.
+    """
     intent = parsed.get("intent", "OTHERS")
     if intent not in ["NEW_TRADE", "TRADE_UPDATE", "OTHERS"]:
         if intent in ["CHATTER"]:
@@ -658,41 +627,14 @@ def _normalize_ai_response(
         else:
             intent = "OTHERS"
 
-    raw_upper = (raw_text or "").upper().strip()
-
-    # Active intent enforcement:
-    is_active_lead = any(k in raw_upper for k in ["ACTIVE TRADE", "ACTIVE NOW", "ACTIVE SELLING", "ACTIVE BUYING", "ENTER NOW", "ENTER FAST", "ENTER CMP"]) or raw_upper == "ACTIVE"
-
-    history_active = False
-    history_selling = False
-    history_buying = False
-    if history_messages and len(history_messages) > 0:
-        for hm in history_messages[-3:]:
-            htxt = (hm.get("text") or "").upper().strip()
-            if any(k in htxt for k in ["ACTIVE TRADE", "ACTIVE NOW", "ACTIVE SELLING", "ACTIVE"]) or htxt == "ACTIVE":
-                history_active = True
-            if "SELL" in htxt or "SHORT" in htxt:
-                history_selling = True
-            if "BUY" in htxt or "LONG" in htxt:
-                history_buying = True
-
-    is_pending_wording = any(k in raw_upper for k in ["WAIT FOR", "CONFIRMATION PE HI", "BE READY ON THIS LEVEL", "PLAN KRENGE"]) and not is_active_lead
-
+    # Truly respect AI's semantic decision on whether this is an immediate live execution
+    # or a conditional plan/idea (NO naive regex keyword overrides!):
     is_active_now = bool(parsed.get("is_active_now", False))
-    if is_active_lead:
-        is_active_now = True
-    elif history_active and not is_pending_wording:
-        is_active_now = True
 
-    # If action is None or NONE, infer from text or history:
-    action = (parsed.get("action") or "").upper()
-    if not action or action == "NONE":
-        if "SELL" in raw_upper or "SHORT" in raw_upper or history_selling:
-            action = "SELL"
-        elif "BUY" in raw_upper or "LONG" in raw_upper or history_buying:
-            action = "BUY"
-        else:
-            action = "BUY"
+    # Action (BUY vs SELL)
+    action = (parsed.get("action") or "").upper().strip()
+    if not action or action not in ["BUY", "SELL"]:
+        action = "BUY"
 
     entry_price = str(parsed.get("entry_price")).replace(",", "") if parsed.get("entry_price") is not None else None
     if entry_price and entry_price.lower() in ["none", "null", "cmp"]:
@@ -712,24 +654,19 @@ def _normalize_ai_response(
         tp_levels = [str(x).replace(",", "") for x in tp_levels if x is not None]
 
     # Mathematical direction verification (immutable trading law)
-    # Never swap user SL and TP! Instead, verify and enforce the correct direction (BUY vs SELL).
+    # If SL is above entry, it is mathematically a SELL; if SL is below entry, it is BUY.
     if sl:
         try:
             sl_f = float(sl)
             ref_f = float(entry_price) if entry_price else (float(tp_levels[0]) if tp_levels else None)
             if ref_f is not None and ref_f > 0:
                 if sl_f > ref_f:
-                    # SL is above Entry / TP -> In all financial markets this is unequivocally SELL (Short)
-                    if action != "SELL":
-                        action = "SELL"
+                    action = "SELL"
                 elif sl_f < ref_f:
-                    # SL is below Entry / TP -> In all financial markets this is unequivocally BUY (Long)
-                    if action != "BUY":
-                        action = "BUY"
+                    action = "BUY"
         except Exception:
             pass
 
-    # Also verify TP direction relative to entry price if entry is present
     if entry_price and tp_levels:
         try:
             ent_f = float(entry_price)
@@ -742,15 +679,17 @@ def _normalize_ai_response(
         except Exception:
             pass
 
-    # If SL is given or numbers present and history had active lead, ensure NEW_TRADE:
-    if (is_active_lead or history_active) and intent == "OTHERS" and (sl or re.search(r'\d+', raw_text)):
-        intent = "NEW_TRADE"
-
     is_trade = 1 if intent in ["NEW_TRADE", "TRADE_UPDATE"] else 0
+
+    # Extract clean symbol (e.g. USDCHF, GOLD, BTCUSD, US30)
+    raw_sym = parsed.get("symbol")
+    clean_sym = str(raw_sym).upper().replace("/", "").strip() if raw_sym else None
+    if clean_sym in ["NONE", "NULL", "UNKNOWN"]:
+        clean_sym = None
 
     return {
         "intent": intent,
-        "symbol": parsed.get("symbol") or "XAUUSD",
+        "symbol": clean_sym,
         "action": action,
         "order_type": (parsed.get("order_type") or "MARKET").upper(),
         "entry_price": entry_price,

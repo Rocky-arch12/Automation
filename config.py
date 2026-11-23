@@ -45,9 +45,15 @@ class Settings:
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY") or Fernet.generate_key().decode()
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
 
+    # MongoDB Atlas Logging Configuration (Auto-purged via TTL Index)
+    MONGODB_URI: str = os.getenv("MONGODB_URI", "")
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "alphasignal_logs")
+    MONGODB_LOG_TTL_DAYS: int = int(os.getenv("MONGODB_LOG_TTL_DAYS", "7"))
+
     # System Status flags
     LISTENER_RUNNING: bool = False
     LISTENER_TYPE: str = "none" # "bot", "client", "simulator"
 
 settings = Settings()
 settings.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+(settings.BASE_DIR / "logs").mkdir(parents=True, exist_ok=True)

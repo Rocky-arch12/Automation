@@ -193,14 +193,16 @@ class XMExecutionEngine:
             }
         }
 
-    def resolve_xm_symbol(self, raw_symbol: str) -> str:
+    def resolve_xm_symbol(self, raw_symbol: str) -> Optional[str]:
         """
-        Resolves asset symbols to XM's exact MT5 symbol names.
-        E.g. XAUUSD -> 'GOLD' or 'GOLDmicro' or 'XAUUSD'.
+        Dynamically resolves ANY asset symbol across all 1,600+ symbols on XM MT5.
+        Handles Forex majors, minors, exotics, Cryptos, Metals, Indices, and Commodities.
+        Returns the exact MT5 symbol name, or None if the symbol cannot be resolved.
         """
-        s = (raw_symbol or "XAUUSD").upper().strip()
+        s = (raw_symbol or "").upper().replace("/", "").replace(" ", "").strip()
+        if not s:
+            s = "GOLD"
         
-        # Standardize common names
         is_gold = any(k in s for k in ["XAU", "GOLD"])
         is_btc = any(k in s for k in ["BTC", "BITCOIN"])
 
@@ -208,23 +210,47 @@ class XMExecutionEngine:
             try:
                 symbols = mt5.symbols_get()
                 if symbols:
-                    sym_names = [sym.name for sym in symbols]
+                    sym_dict = {sym.name.upper(): sym.name for sym in symbols}
+                    
+                    # 1. Direct match (e.g. "USDCHF", "EURUSD", "GOLD", "BTCUSD")
+                    if s in sym_dict:
+                        sym_name = sym_dict[s]
+                        mt5.symbol_select(sym_name, True)
+                        return sym_name
+                    
+                    # 2. Gold variants
                     if is_gold:
-                        for candidate in ["GOLD", "GOLDmicro", "XAUUSD", "XAUUSDm", "XAUUSD."]:
-                            if candidate in sym_names:
-                                return candidate
-                    elif is_btc:
+                        for candidate in ["GOLD", "GOLDmicro", "GOLDm", "GOLD.", "XAUUSD", "XAUUSDmicro", "XAUUSDm", "XAUUSD."]:
+                            if candidate.upper() in sym_dict:
+                                sym_name = sym_dict[candidate.upper()]
+                                mt5.symbol_select(sym_name, True)
+                                return sym_name
+                    
+                    # 3. Bitcoin variants
+                    if is_btc:
                         for candidate in ["BTCUSD", "BTCUSDmicro", "BTCUSDT", "BTCUSD."]:
-                            if candidate in sym_names:
-                                return candidate
-                    else:
-                        clean_sym = s.replace("USDT", "USD").replace("/", "")
-                        for candidate in [clean_sym, f"{clean_sym}micro", f"{clean_sym}m", f"{clean_sym}."]:
-                            if candidate in sym_names:
-                                return candidate
-            except Exception:
-                pass
+                            if candidate.upper() in sym_dict:
+                                sym_name = sym_dict[candidate.upper()]
+                                mt5.symbol_select(sym_name, True)
+                                return sym_name
 
+                    # 4. Standard Forex & Index candidates (e.g. USDCHF -> USDCHF, USDCHFmicro, USDCHFm, USDCHF.)
+                    clean_sym = s.replace("USDT", "USD")
+                    for candidate in [clean_sym, f"{clean_sym}micro", f"{clean_sym}m", f"{clean_sym}.", f"{clean_sym}Cash", f"#{clean_sym}"]:
+                        if candidate.upper() in sym_dict:
+                            sym_name = sym_dict[candidate.upper()]
+                            mt5.symbol_select(sym_name, True)
+                            return sym_name
+
+                    # 5. Dynamic prefix / contains match across all 1,600+ XM symbols
+                    for sym_upper, real_name in sym_dict.items():
+                        if s in sym_upper or sym_upper.startswith(s):
+                            mt5.symbol_select(real_name, True)
+                            return real_name
+            except Exception as e:
+                print(f"[RESOLVE XM SYMBOL ERROR] {e}")
+
+        # In Mock / Sandbox mode or if terminal is offline, return standardized broker symbol
         if is_gold:
             return "GOLD"
         if is_btc:
@@ -374,6 +400,16 @@ class XMExecutionEngine:
         """
         symbol_raw = trade_data.get("symbol") or "XAUUSD"
         xm_symbol = self.resolve_xm_symbol(symbol_raw)
+        if not xm_symbol:
+            val_msg = f"REJECTED: Symbol '{symbol_raw}' could not be resolved on XM MT5. Safety shield prevented executing on Gold."
+            await log_event("WARNING", "XM_SAFETY", val_msg)
+            return {
+                "success": False,
+                "status": "UNRESOLVED_SYMBOL",
+                "message": val_msg,
+                "ticket": None
+            }
+
         action_raw = trade_data.get("action") or "BUY"
         is_buy = "BUY" in action_raw.upper() or "LONG" in action_raw.upper()
 
@@ -459,21 +495,17 @@ class XMExecutionEngine:
                 price = tick.ask if is_buy else tick.bid
                 digits = getattr(sym_info, 'digits', 2)
 
-                # Ensure SL & TP are strictly aligned with live market execution price to avoid 10016 (Invalid Stops)
-                order_sl = float(final_sl)
-                order_tp = float(final_tp) if (final_tp is not None and float(final_tp) > 0) else 0.0
-                risk_dist = abs(price - final_sl) if final_sl else 10.0
-                if risk_dist <= 0:
-                    risk_dist = 5.0
-
+                # Ensure Stop Loss is logically on the valid side of live market price.
+                # If market price is ALREADY past the Stop Loss, the signal is STALE/INVALID:
+                # NEVER push the Stop Loss 500 pips away!
                 if is_buy:
                     if order_sl >= price:
-                        order_sl = round(price - risk_dist, digits)
+                        return None, f"Market price ({price}) is below/at Stop Loss ({order_sl}) for BUY. Signal is stale/invalid."
                     if order_tp > 0.0 and order_tp <= price:
                         order_tp = 0.0
                 else:
                     if order_sl <= price:
-                        order_sl = round(price + risk_dist, digits)
+                        return None, f"Market price ({price}) is above/at Stop Loss ({order_sl}) for SELL. Signal is stale/invalid."
                     if order_tp > 0.0 and order_tp >= price:
                         order_tp = 0.0
 

@@ -8,10 +8,13 @@ echo ===================================================
 
 cd /d "%~dp0"
 
-REM 1. Prevent Windows from sleeping or suspending network adapter while plugged in
+REM 1. Prevent Windows from sleeping or suspending network adapter while plugged in, and keep running when lid is closed
 echo [CONFIG] Configuring Windows power state to stay awake 24/7...
 powercfg /change standby-timeout-ac 0 >nul 2>&1
 powercfg /change hibernate-timeout-ac 0 >nul 2>&1
+powercfg /setacvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0 >nul 2>&1
+powercfg /setdcvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0 >nul 2>&1
+powercfg /setactive SCHEME_CURRENT >nul 2>&1
 
 REM 2. Check mode: test runner components without blocking
 if not "%~1"=="--check" goto skip_check

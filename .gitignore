@@ -21,3 +21,8 @@ cloudflared.exe
 
 # Uploads
 uploads/
+
+# Local Logs
+logs/
+*.log
+

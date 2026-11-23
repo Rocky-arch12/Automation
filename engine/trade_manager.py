@@ -84,25 +84,35 @@ TRADE_OUTCOMES = {
 }
 
 # In-memory registry of active trade initiations waiting for companion parameter messages
+# Schema: {channel_key: {"trade_id": str, "symbol": str, "action": str, "timestamp": float}}
 _active_initiations: Dict[str, Dict[str, Any]] = {}
+INITIATION_TTL_SECONDS = 180  # Strict 3-minute Time-To-Live for multi-message signal chaining
 
 def normalize_symbol(symbol: Optional[str], text: Optional[str] = None) -> str:
-    """Normalizes symbol string to standard broker codes."""
-    s = (symbol or "").upper().strip()
-    t = (text or "").upper().strip()
+    """
+    Cleans and standardizes the asset symbol without forcing non-Gold assets to Gold.
+    All assets (Forex pairs, Crypto, Indices, Metals) are preserved for dynamic XM broker resolution.
+    """
+    s = (symbol or "").upper().replace("/", "").replace(" ", "").strip()
+    if s and s not in ["NONE", "NULL", "UNKNOWN", "CMP"]:
+        return s
     
-    if "BTC" in s or "BITCOIN" in s or "BTC" in t or "BITCOIN" in t:
-        return "BTCUSDT"
-    if "ETH" in s or "ETHEREUM" in s or "ETH" in t:
-        return "ETHUSDT"
-    if "GBP" in s or "CABLE" in s or "GBP" in t:
-        return "GBPUSD"
-    if "EUR" in s or "EUR" in t:
-        return "EURUSD"
-    if "AUD" in s or "AUD" in t:
-        return "AUDUSD"
-    
-    # Default asset in ALPHA PREMIUM channel is Gold
+    t = (text or "").upper()
+    # Check if an explicit asset is named in the message text
+    if "GOLD" in t or "XAU" in t:
+        return "XAUUSD"
+    if "BTC" in t or "BITCOIN" in t:
+        return "BTCUSD"
+    if "ETH" in t or "ETHEREUM" in t:
+        return "ETHUSD"
+    for fx in ["USDCHF", "USDJPY", "EURUSD", "GBPUSD", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY"]:
+        if fx in t:
+            return fx
+    for idx in ["US30", "NAS100", "GER40", "US500"]:
+        if idx in t:
+            return idx
+
+    # Default to Gold only if no instrument was identified
     return "XAUUSD"
 
 def parse_entry_price(val: Any) -> float:
@@ -123,6 +133,74 @@ def parse_price(val: Any) -> float:
         return 0.0
     numbers = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', str(val).replace(",", ""))]
     return numbers[0] if numbers else 0.0
+
+async def find_duplicate_trade(
+    symbol: str,
+    action: str,
+    entry_float: float,
+    sl_float: float = 0.0,
+    current_channel_id: Optional[str] = None,
+    max_recent_seconds: int = 180
+) -> Optional[Dict[str, Any]]:
+    """
+    Checks if an identical trade setup was recently created, is pending, or is already
+    running on MT5 with the same symbol, action, and Stop Loss to prevent duplicate execution.
+    """
+    try:
+        async with get_db() as conn:
+            cursor = await conn.execute("""
+                SELECT id, trade_id, symbol, action, entry_price, sl, status, is_active,
+                       channel_id, channel_title, created_at
+                FROM trades
+                WHERE symbol = ? AND action = ?
+                ORDER BY id DESC LIMIT 5
+            """, (symbol, action))
+            rows = [dict(r) for r in await cursor.fetchall()]
+
+        now_ts = datetime.utcnow().timestamp()
+        for row in rows:
+            created_str = row.get("created_at")
+            if not created_str:
+                continue
+
+            try:
+                trade_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+                age_seconds = now_ts - trade_dt.timestamp()
+            except Exception:
+                age_seconds = 0
+
+            row_entry = parse_entry_price(row.get("entry_price"))
+            row_sl = parse_price(row.get("sl"))
+            status = row.get("status")
+
+            # Check 1: Live open position with the exact same Stop Loss (prevents re-entering on chart updates)
+            if status in ["EXECUTED", "ACTIVE"] and row.get("is_active") == 1:
+                if sl_float > 0 and row_sl > 0:
+                    if abs(sl_float - row_sl) <= 1.0:
+                        return row
+
+            # Check 2: Extremely recent message (<= 180s = 3 mins) on the same symbol and action
+            if age_seconds <= max_recent_seconds:
+                if entry_float > 0 and row_entry > 0:
+                    diff_ratio = abs(entry_float - row_entry) / row_entry
+                    if diff_ratio <= 0.0035:
+                        return row
+                elif entry_float == 0 and row_entry == 0:
+                    return row
+                elif age_seconds <= 60:
+                    return row
+
+            # Check 3: Ongoing PENDING setup (up to 30 mins old) with identical entry price
+            if status in ["PENDING", "PENDING_AWAITING_PARAMS"] and age_seconds <= 1800:
+                if entry_float > 0 and row_entry > 0:
+                    diff_ratio = abs(entry_float - row_entry) / row_entry
+                    if diff_ratio <= 0.001:
+                        return row
+
+        return None
+    except Exception as e:
+        print(f"[DEDUPLICATION CHECK ERROR] {e}")
+        return None
 
 async def correlate_and_process_trade(
     message_id: int,
@@ -159,26 +237,22 @@ async def correlate_and_process_trade(
 
     # -------------------------------------------------------------
     # 0. Check for Active Initiation Chaining:
-    # If this message contains SL/levels, check if an active trade was recently initiated
-    # (e.g. owner sent "Active trade" or chart 30 seconds ago, and now sent "Entry-3770 / Sl-3763 / Tp-3783")
+    # If this message is a genuine trade intent AND contains SL/levels,
+    # check if an active trade was recently initiated within 3 minutes (TTL).
+    # NEVER chain promotional spam, broker marketing, or general chatter!
     # -------------------------------------------------------------
-    pending_initiation = _active_initiations.pop(chan_key, None)
-    if not pending_initiation:
-        # Check DB for recent PENDING_AWAITING_PARAMS trade created within last 5 minutes
-        async with get_db() as conn:
-            cursor = await conn.execute("""
-                SELECT trade_id, symbol, action, created_at FROM trades
-                WHERE status = 'PENDING_AWAITING_PARAMS' AND is_active = 1
-                ORDER BY id DESC LIMIT 1
-            """)
-            row = await cursor.fetchone()
-            if row:
-                try:
-                    trade_dt = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
-                    if (datetime.utcnow().timestamp() - trade_dt.timestamp()) <= 300: # 5 minutes
-                        pending_initiation = dict(row)
-                except Exception:
-                    pass
+    pending_initiation = None
+    if intent in ["NEW_TRADE", "TRADE_UPDATE"] and sl_float > 0:
+        if chan_key in _active_initiations:
+            entry_init = _active_initiations[chan_key]
+            entry_age = time.time() - entry_init.get("timestamp", 0)
+            if entry_age <= INITIATION_TTL_SECONDS:
+                init_sym = entry_init.get("symbol")
+                # Ensure symbol compatibility: do NOT chain Gold numbers to Bitcoin!
+                if not symbol or symbol == init_sym or ("XAU" in symbol and "XAU" in str(init_sym)):
+                    pending_initiation = _active_initiations.pop(chan_key)
+            else:
+                _active_initiations.pop(chan_key, None) # Expired
 
     if pending_initiation and sl_float > 0:
         target_tid = pending_initiation.get("trade_id")
@@ -245,6 +319,49 @@ async def correlate_and_process_trade(
     # 1. NEW TRADE SETUP
     # -------------------------------------------------------------
     if intent == "NEW_TRADE":
+        # 0. Cross-channel Trade Deduplication Check
+        # Check if identical setup was already broadcast in another channel or recorded recently
+        dup_trade = await find_duplicate_trade(
+            symbol=symbol,
+            action=action,
+            entry_float=entry_float,
+            sl_float=sl_float,
+            current_channel_id=channel_id,
+            max_recent_seconds=180
+        )
+
+        if dup_trade:
+            target_tid = dup_trade["trade_id"]
+            await update_message_trade_id(message_id, target_tid)
+            async with get_db() as conn:
+                await conn.execute(
+                    "UPDATE trades SET last_message_id = ?, updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?",
+                    (message_id, target_tid)
+                )
+                await conn.execute("""
+                    INSERT INTO trade_events (trade_id, message_id, event_type, previous_status, new_status, notes)
+                    VALUES (?, ?, 'DEDUPLICATION', ?, ?, ?)
+                """, (
+                    target_tid,
+                    message_id,
+                    dup_trade.get("status", "PENDING"),
+                    dup_trade.get("status", "PENDING"),
+                    f"Cross-channel duplicate broadcast detected from '{channel_title or channel_id}'. Linked to existing trade {target_tid} to prevent duplicate execution."
+                ))
+                await conn.commit()
+
+            await log_event(
+                "INFO", "TRADE_DEDUPLICATION",
+                f"Duplicate signal from '{channel_title or channel_id}' linked to existing trade {target_tid}. Skipping duplicate order creation.",
+                details=f"Symbol: {symbol}, Action: {action}, Entry: {entry_float or entry_raw or 'CMP'}, Existing Status: {dup_trade.get('status')}"
+            )
+
+            return {
+                "trade_id": target_tid,
+                "action": "DEDUPLICATED",
+                "message": f"Duplicate setup from channel '{channel_title}' linked to existing trade {target_tid} (prevents double execution)."
+            }
+
         trade_id = await generate_trade_id(symbol)
 
         # Case A: Owner signaled immediate market entry / Active trade
@@ -341,6 +458,7 @@ async def correlate_and_process_trade(
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "action": action,
+                    "timestamp": time.time(),
                     "created_at": datetime.utcnow().isoformat()
                 }
                 await log_event(

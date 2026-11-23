@@ -2,6 +2,11 @@ import os
 import asyncio
 import shutil
 import uuid
+import time
+import json
+import logging
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -12,6 +17,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config import settings
+
+# Configure persistent rotating file logging in logs/server.log (10MB, max 5 files)
+# Ensures that even if the console window is closed (Ctrl + C), all logs and stack traces are preserved.
+_log_file = settings.BASE_DIR / "logs" / "server.log"
+_log_file.parent.mkdir(parents=True, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    str(_log_file),
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8"
+)
+_file_formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")
+_file_handler.setFormatter(_file_formatter)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+_root_logger.addHandler(_file_handler)
+
+for _uvi_logger in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    logging.getLogger(_uvi_logger).addHandler(_file_handler)
 from auth import (
     create_access_token, decode_access_token,
     get_current_user, get_current_user_optional, get_current_authorized_user,
@@ -25,7 +49,8 @@ from database import (
     get_all_settings, set_setting, set_settings_bulk, log_event, clear_all_data,
     save_message, save_interpretation,
     get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome,
-    expire_old_pending_trades,
+    expire_old_pending_trades, purge_old_system_logs,
+    save_api_log, get_api_logs, purge_old_api_logs,
     create_user, get_user_by_email, get_user_by_id, get_user_all_settings,
     get_user_setting, set_user_setting, SENSITIVE_KEYS
 )
@@ -92,7 +117,14 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
     await seed_initial_messages_if_empty()
-    await log_event("INFO", "SYSTEM", "AlphaSignal AI system initialized with ALPHA PREMIUM feed.")
+    
+    # Initialize MongoDB Atlas Logger (with 7-Day TTL Auto-Purge)
+    from mongo_logger import mongo_logger
+    mongo_ok = await mongo_logger.initialize()
+    if mongo_ok:
+        await log_event("INFO", "SYSTEM", "Connected to MongoDB Atlas. 7-Day TTL auto-purge index active.")
+    else:
+        await log_event("INFO", "SYSTEM", "AlphaSignal AI system initialized with ALPHA PREMIUM feed.")
     
     # Auto-start bot listener if token is configured
     stored_settings = await get_all_settings()
@@ -151,8 +183,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         await log_event("WARN", "XM_MT5", f"XM MT5 startup initialization warning: {e}")
 
-    # Background worker: 2-Hour Inactivity Auto-Cancellation for Pending Trades
+    # Background worker: 2-Hour Inactivity Auto-Cancellation for Pending Trades & 7-Day Log Purge
     async def _expiration_worker():
+        purge_cycle = 0
         while True:
             try:
                 await asyncio.sleep(30)
@@ -163,6 +196,15 @@ async def lifespan(app: FastAPI):
                         "data": {"expired_trade_ids": expired_ids}
                     })
                     await log_event("INFO", "TRADE_LIFECYCLE", f"Auto-cancelled {len(expired_ids)} expired trade(s): {expired_ids}")
+
+                # Purge local logs older than 7 days once every hour (120 cycles * 30s)
+                purge_cycle += 1
+                if purge_cycle >= 120:
+                    purge_cycle = 0
+                    purged_count = await purge_old_system_logs(days=7)
+                    purged_api = await purge_old_api_logs(days=7)
+                    if purged_count > 0 or purged_api > 0:
+                        await log_event("INFO", "SYSTEM", f"Purged local logs older than 7 days: {purged_count} system logs, {purged_api} API logs.")
             except asyncio.CancelledError:
                 break
             except Exception as ex:
@@ -243,6 +285,8 @@ async def lifespan(app: FastAPI):
     xm_1to1_task.cancel()
     if listener_manager.is_running:
         await listener_manager.stop_listener()
+    from mongo_logger import mongo_logger
+    await mongo_logger.close()
     await log_event("INFO", "SYSTEM", "AlphaSignal AI server shutting down.")
 
 app = FastAPI(title="AlphaSignal AI", lifespan=lifespan)
@@ -264,6 +308,97 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# HTTP API Request & Response Audit Logging Middleware
+# Captures every API hit, status code, latency, request & response payload into MongoDB Atlas (7-Day TTL Auto-Purge)
+@app.middleware("http")
+async def api_audit_middleware(request: Request, call_next):
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+    client_ip = request.client.host if request.client else "unknown"
+    query_params = dict(request.query_params)
+
+    # Skip heavy static files, uploads, and recursive audit query
+    is_static = path.startswith(("/uploads", "/sample_signals", "/favicon.ico"))
+    is_audit_query = path == "/api/logs/api-hits"
+
+    body_data = None
+    if not is_static and not is_audit_query and method in ("POST", "PUT", "PATCH", "DELETE"):
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type or "application/x-www-form-urlencoded" in content_type:
+            try:
+                body_bytes = await request.body()
+                if body_bytes:
+                    try:
+                        body_data = json.loads(body_bytes.decode("utf-8"))
+                    except Exception:
+                        body_data = body_bytes.decode("utf-8", errors="ignore")[:1000]
+                async def receive():
+                    return {"type": "http.request", "body": body_bytes}
+                request._receive = receive
+            except Exception:
+                pass
+        elif "multipart/form-data" in content_type:
+            body_data = "[Multipart / Form Data / File Upload]"
+
+    response = None
+    error_msg = None
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        error_msg = str(exc)
+        duration_ms = (time.time() - start_time) * 1000
+        asyncio.create_task(save_api_log(
+            method=method,
+            path=path,
+            status_code=500,
+            duration_ms=duration_ms,
+            client_ip=client_ip,
+            query_params=query_params,
+            request_body=body_data,
+            response_body={"error": error_msg},
+            error=error_msg
+        ))
+        raise exc
+
+    duration_ms = (time.time() - start_time) * 1000
+
+    # Capture JSON response body for API routes
+    res_data = None
+    if not is_static and not is_audit_query and path.startswith("/api"):
+        res_content_type = response.headers.get("content-type", "")
+        if "application/json" in res_content_type:
+            res_chunks = []
+            async for chunk in response.body_iterator:
+                res_chunks.append(chunk)
+            res_bytes = b"".join(res_chunks)
+            try:
+                res_data = json.loads(res_bytes.decode("utf-8"))
+            except Exception:
+                res_data = res_bytes.decode("utf-8", errors="ignore")[:1000]
+            response = Response(
+                content=res_bytes,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type
+            )
+
+    # Save API log asynchronously to MongoDB Atlas (7-Day TTL) & SQLite
+    if not is_static and not is_audit_query:
+        asyncio.create_task(save_api_log(
+            method=method,
+            path=path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+            client_ip=client_ip,
+            query_params=query_params,
+            request_body=body_data,
+            response_body=res_data,
+            error=error_msg
+        ))
+
+    return response
 
 # Mount Uploads & Sample Signals directories
 app.mount("/uploads", StaticFiles(directory=str(settings.UPLOADS_DIR)), name="uploads")
@@ -355,7 +490,31 @@ async def get_dashboard_stats():
 async def get_system_logs(limit: int = Query(100, ge=1, le=500), user: Optional[dict] = Depends(get_current_user_optional)):
     user_id = user["id"] if user else "default"
     logs = await get_logs(limit=limit, user_id=user_id)
-    return {"logs": logs}
+    from mongo_logger import mongo_logger
+    return {
+        "logs": logs,
+        "storage": "mongodb_atlas" if mongo_logger.is_connected else "sqlite_local",
+        "mongo_connected": mongo_logger.is_connected,
+        "ttl_days": getattr(settings, "MONGODB_LOG_TTL_DAYS", 7)
+    }
+
+@app.get("/api/logs/api-hits")
+async def get_api_hit_logs(
+    limit: int = Query(100, ge=1, le=500),
+    path: Optional[str] = Query(None),
+    status_code: Optional[int] = Query(None),
+    method: Optional[str] = Query(None),
+    user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """Returns detailed HTTP API hit logs with request/response payloads, status codes, and execution timings."""
+    hits = await get_api_logs(limit=limit, path=path, status_code=status_code, method=method)
+    from mongo_logger import mongo_logger
+    return {
+        "api_hits": hits,
+        "total": len(hits),
+        "storage": "mongodb_atlas" if mongo_logger.is_connected else "sqlite_local",
+        "ttl_days": getattr(settings, "MONGODB_LOG_TTL_DAYS", 7)
+    }
 
 # Simulation endpoint: allows testing text & images instantly from Web UI
 @app.post("/api/simulate")

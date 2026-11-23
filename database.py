@@ -1,5 +1,6 @@
 import json
 import secrets
+import asyncio
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -80,6 +81,22 @@ async def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method TEXT,
+                path TEXT,
+                status_code INTEGER,
+                duration_ms REAL,
+                client_ip TEXT,
+                query_params TEXT,
+                request_body TEXT,
+                response_body TEXT,
+                error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -231,6 +248,19 @@ async def log_event(level: str, category: str, message: str, details: Optional[s
             await conn.commit()
     except Exception as e:
         print(f"[LOG ERROR] Failed to write system log: {e}")
+
+    # Asynchronously dispatch to MongoDB Atlas (Fire-and-forget, non-blocking)
+    try:
+        from mongo_logger import mongo_logger
+        if mongo_logger.is_connected:
+            asyncio.create_task(mongo_logger.log_event(
+                level=level,
+                category=category,
+                message=message,
+                details=details
+            ))
+    except Exception:
+        pass
 
 async def save_message(
     channel_id: str,
@@ -879,12 +909,149 @@ async def get_trade_timeline(trade_id: str) -> Dict[str, Any]:
         return trade
 
 async def get_logs(limit: int = 100, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    # Prefer MongoDB if connected, fall back to SQLite
+    try:
+        from mongo_logger import mongo_logger
+        if mongo_logger.is_connected:
+            mongo_results = await mongo_logger.get_logs(limit=limit, user_id=user_id)
+            if mongo_results:
+                return mongo_results
+    except Exception:
+        pass
+
     async with get_db() as conn:
         if user_id and user_id != "default":
             cursor = await conn.execute("SELECT * FROM system_logs WHERE user_id = ? OR user_id = 'default' ORDER BY id DESC LIMIT ?", (user_id, limit))
         else:
             cursor = await conn.execute("SELECT * FROM system_logs ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in await cursor.fetchall()]
+
+async def purge_old_system_logs(days: int = 7) -> int:
+    """Purges SQLite system logs older than `days` (default 7 days) to keep storage clean."""
+    try:
+        async with get_db() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM system_logs WHERE created_at < datetime('now', ?)",
+                (f"-{days} days",)
+            )
+            purged = cursor.rowcount
+            await conn.commit()
+            return purged
+    except Exception as e:
+        print(f"[PURGE ERROR] Failed to purge old logs: {e}")
+        return 0
+
+async def save_api_log(
+    method: str,
+    path: str,
+    status_code: int,
+    duration_ms: float,
+    client_ip: Optional[str] = None,
+    query_params: Optional[Dict[str, Any]] = None,
+    request_body: Optional[Any] = None,
+    response_body: Optional[Any] = None,
+    user_id: Optional[str] = "default",
+    error: Optional[str] = None
+):
+    """Saves HTTP API request, response, payload, and status to MongoDB Atlas and local SQLite backup."""
+    # 1. Asynchronously dispatch to MongoDB Atlas (7-Day TTL Auto-Purge)
+    try:
+        from mongo_logger import mongo_logger
+        if mongo_logger.is_connected:
+            asyncio.create_task(mongo_logger.log_api_hit(
+                method=method,
+                path=path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                client_ip=client_ip,
+                query_params=query_params,
+                request_body=request_body,
+                response_body=response_body,
+                user_id=user_id,
+                error=error
+            ))
+    except Exception:
+        pass
+
+    # 2. Local SQLite Backup
+    try:
+        req_str = json.dumps(request_body) if isinstance(request_body, (dict, list)) else (str(request_body) if request_body is not None else None)
+        res_str = json.dumps(response_body) if isinstance(response_body, (dict, list)) else (str(response_body) if response_body is not None else None)
+        qp_str = json.dumps(query_params) if query_params else None
+
+        async with get_db() as conn:
+            await conn.execute("""
+                INSERT INTO api_logs (method, path, status_code, duration_ms, client_ip, query_params, request_body, response_body, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                method, path, status_code, duration_ms, client_ip, qp_str, req_str, res_str, error
+            ))
+            await conn.commit()
+    except Exception as ex:
+        print(f"[SQLITE API_LOG ERROR] {ex}")
+
+async def get_api_logs(
+    limit: int = 100,
+    path: Optional[str] = None,
+    status_code: Optional[int] = None,
+    method: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Retrieves API logs, preferring MongoDB Atlas if connected, otherwise SQLite."""
+    try:
+        from mongo_logger import mongo_logger
+        if mongo_logger.is_connected:
+            mongo_logs = await mongo_logger.get_api_logs(limit=limit, path=path, status_code=status_code, method=method)
+            if mongo_logs:
+                return mongo_logs
+    except Exception:
+        pass
+
+    async with get_db() as conn:
+        conditions = []
+        params = []
+        if path:
+            conditions.append("path LIKE ?")
+            params.append(f"%{path}%")
+        if status_code:
+            conditions.append("status_code = ?")
+            params.append(status_code)
+        if method:
+            conditions.append("method = ?")
+            params.append(method.upper())
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        query = f"SELECT * FROM api_logs {where_clause} ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = await conn.execute(query, tuple(params))
+        rows = [dict(r) for r in await cursor.fetchall()]
+        for r in rows:
+            r["source"] = "sqlite"
+            if r.get("request_body"):
+                try: r["request_body"] = json.loads(r["request_body"])
+                except Exception: pass
+            if r.get("response_body"):
+                try: r["response_body"] = json.loads(r["response_body"])
+                except Exception: pass
+            if r.get("query_params"):
+                try: r["query_params"] = json.loads(r["query_params"])
+                except Exception: pass
+        return rows
+
+async def purge_old_api_logs(days: int = 7) -> int:
+    """Purges SQLite api_logs older than `days` (default 7 days)."""
+    try:
+        async with get_db() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM api_logs WHERE created_at < datetime('now', ?)",
+                (f"-{days} days",)
+            )
+            purged = cursor.rowcount
+            await conn.commit()
+            return purged
+    except Exception as e:
+        print(f"[PURGE API LOGS ERROR] {e}")
+        return 0
 
 # Multi-Tenant User Management
 async def create_user(email: str, password: Optional[str] = None, name: str = "", auth_provider: str = "local", avatar_url: Optional[str] = None) -> Dict[str, Any]:
