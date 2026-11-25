@@ -441,6 +441,14 @@ async function loadSystemStatus() {
     if (aiEl) {
       aiEl.innerText = `AI: ${data.ai.mode}`;
     }
+    const chartAiBadge = document.getElementById("chart-ai-badge");
+    if (chartAiBadge && data.ai) {
+      chartAiBadge.innerText = data.ai.provider === "gemini" ? (data.ai.gemini_model || "Gemini") : (data.ai.text_model || data.ai.mode);
+    }
+    const infraAiEl = document.getElementById("infra-ai-val");
+    if (infraAiEl && data.ai) {
+      infraAiEl.innerHTML = `<i data-lucide="cpu" style="width:12px;height:12px;"></i> ${escapeHtml(data.ai.text_model || data.ai.mode)}`;
+    }
 
     // Load XM MT5 status
     try {
@@ -450,12 +458,15 @@ async function loadSystemStatus() {
       const xmBadge = document.getElementById("xm-status-badge");
       if (xmEl && xm) {
         const bal = xm.account ? `$${xm.account.balance.toLocaleString()}` : "";
-        if (xm.auto_execution) {
-          xmEl.innerText = `XM MT5: Demo Active (${bal})`;
-          if (xmBadge) xmBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
-        } else {
+        if (!xm.auto_execution) {
           xmEl.innerText = `XM MT5: Execution Off`;
           if (xmBadge) xmBadge.style.borderColor = "rgba(100, 116, 139, 0.4)";
+        } else if (xm.mode === "XM_DEMO_SANDBOX") {
+          xmEl.innerText = `XM MT5: Sandbox (${bal})`;
+          if (xmBadge) xmBadge.style.borderColor = "rgba(245, 158, 11, 0.4)";
+        } else {
+          xmEl.innerText = `XM MT5: Demo Active (${bal})`;
+          if (xmBadge) xmBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
         }
       }
     } catch (xe) {
@@ -561,10 +572,10 @@ function getOutcomeBadgeClass(status) {
 function createSignalCardHtml(msg) {
   const intent = msg.intent || "CHATTER";
   const action = msg.action || "NONE";
-  const isBuy = action.includes("BUY") || action === "LONG";
-  const isSell = action.includes("SELL") || action === "SHORT";
-  const isUpdate = intent === "TRADE_UPDATE" || action.includes("MODIFY") || action.includes("PARTIAL");
-  const isChatter = intent === "CHATTER";
+  const isChatter = intent === "CHATTER" || intent === "OTHERS";
+  const isBuy = !isChatter && (action.includes("BUY") || action === "LONG");
+  const isSell = !isChatter && (action.includes("SELL") || action === "SHORT");
+  const isUpdate = !isChatter && (intent === "TRADE_UPDATE" || intent === "CLOSE_TRADE" || action.includes("MODIFY") || action.includes("PARTIAL"));
 
   let cardClass = "signal-card";
   let badgeClass = "intent-badge chatter";
@@ -640,7 +651,7 @@ function createSignalCardHtml(msg) {
           <div class="ai-box-head-row">
             <span class="${badgeClass}">
               <i data-lucide="${badgeIcon}" style="width: 13px; height: 13px;"></i>
-              ${intent === "CHATTER" ? "CHATTER / FILTERED" : `${action} ${msg.symbol || ''}`}
+              ${isChatter ? "CHATTER / FILTERED" : `${action} ${msg.symbol || ''}`}
             </span>
             ${msg.symbol && !isChatter ? `<span class="symbol-badge">${msg.symbol}</span>` : ''}
           </div>
@@ -691,8 +702,9 @@ function createSignalCardHtml(msg) {
 // Handle Incoming Live Message via WebSocket
 function handleIncomingMessage(data) {
   messagesCache.unshift(data);
+  const isChat = data.intent === "CHATTER" || data.intent === "OTHERS";
   appendLog(
-    data.intent === "CHATTER" ? "INFO" : "SIGNAL",
+    isChat ? "INFO" : "SIGNAL",
     "STREAM",
     `[${data.intent}] ${data.action || ''} ${data.symbol || ''} - "${(data.text || '').substring(0, 45)}..."`
   );
@@ -700,7 +712,8 @@ function handleIncomingMessage(data) {
   // Re-render feed if matches current filter
   if (currentFilter === "ALL" ||
     (currentFilter === "TRADES" && data.is_trade === 1) ||
-    (currentFilter === "CHATTER" && data.intent === "CHATTER") ||
+    (currentFilter === "CHATTER" && isChat) ||
+    (currentFilter === "UPDATES" && (data.intent === "TRADE_UPDATE" || data.intent === "CLOSE_TRADE")) ||
     (currentFilter === data.intent)) {
     renderFeed(messagesCache);
   }
@@ -914,16 +927,31 @@ async function submitSimulation(e) {
       body: formData
     });
     const result = await res.json();
+    if (!res.ok) {
+      const msg = result.detail || `HTTP ${res.status}`;
+      showToast(res.status === 401 ? "Sign in via Google OAuth to run simulations." : `Simulation failed: ${msg}`, "error");
+      const fb = document.getElementById("sim-feedback-container");
+      if (fb) {
+        fb.innerHTML = `<div class="empty-state"><div class="empty-state-title" style="color: var(--danger-text);">Simulation Rejected (${res.status})</div><div class="empty-state-sub">${escapeHtml(msg)}</div></div>`;
+      }
+      return;
+    }
 
     // Clear inputs
     document.getElementById("sim-text").value = "";
     clearSelectedFile();
     showToast("Signal simulated & parsed successfully!", "success");
 
+    const fb = document.getElementById("sim-feedback-container");
+    if (fb && result.result) {
+      fb.innerHTML = createSignalCardHtml(result.result);
+    }
+
     // Refresh feed and stats
     loadMessages();
     loadStats();
     loadTrades();
+    loadXMPositions();
 
     // Scroll to new card if present
     setTimeout(() => {
@@ -1416,7 +1444,9 @@ function appendLog(level, category, message) {
     <span class="log-msg">${escapeHtml(message)}</span>
   `;
   terminal.appendChild(entry);
-  terminal.scrollTop = terminal.scrollHeight;
+  if (isTerminalAutoScroll) {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
 }
 
 // ============================================================
@@ -1496,8 +1526,18 @@ function handleDashboardAccess() {
 
 function handleHashRouting() {
   const hash = (window.location.hash || "").replace("#", "").toLowerCase().trim();
+  const dashPages = ["chats", "signals", "positions", "watchlist", "simulator", "terminal", "settings"];
   if (hash === "dashboard" || hash === "home") {
     handleDashboardAccess();
+  } else if (dashPages.includes(hash)) {
+    const user = getAuthUser();
+    const allowed = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"];
+    if (user && user.email && allowed.includes(user.email.toLowerCase())) {
+      navigateTo("dashboard");
+      switchDashboardPage(hash);
+    } else {
+      handleDashboardAccess();
+    }
   } else if (hash === "login") {
     navigateTo("login");
   } else if (hash === "register") {
@@ -1925,7 +1965,10 @@ async function stopTelegramBot() {
 async function openSettingsModal() {
   const modal = document.getElementById("settings-modal");
   if (modal) modal.style.display = "flex";
+  await loadSettingsFields();
+}
 
+async function loadSettingsFields() {
   const apiUrlEl = document.getElementById("setting-api-url");
   if (apiUrlEl) {
     apiUrlEl.value = getApiBase();
@@ -1944,9 +1987,9 @@ async function openSettingsModal() {
 
     // Groq fields
     const groqModelEl = document.getElementById("setting-groq-model");
-    if (groqModelEl) groqModelEl.value = cfg.GROQ_TEXT_MODEL || "llama-3.3-70b-versatile";
+    if (groqModelEl) groqModelEl.value = cfg.GROQ_TEXT_MODEL || "openai/gpt-oss-120b";
     const groqVisionEl = document.getElementById("setting-groq-vision-model");
-    if (groqVisionEl) groqVisionEl.value = cfg.GROQ_VISION_MODEL || "llama-3.2-11b-vision-preview";
+    if (groqVisionEl) groqVisionEl.value = cfg.GROQ_VISION_MODEL || "qwen/qwen3.8-27b";
     const groqKeyEl = document.getElementById("setting-groq-key");
     if (groqKeyEl) {
       groqKeyEl.value = "";
@@ -1959,7 +2002,7 @@ async function openSettingsModal() {
 
     // Gemini fields
     const geminiModelEl = document.getElementById("setting-gemini-model");
-    if (geminiModelEl) geminiModelEl.value = cfg.GEMINI_MODEL || "gemini-1.5-flash";
+    if (geminiModelEl) geminiModelEl.value = cfg.GEMINI_MODEL || "gemini-2.5-flash";
     const geminiKeyEl = document.getElementById("setting-gemini-key");
     if (geminiKeyEl) {
       geminiKeyEl.value = "";
@@ -2044,9 +2087,9 @@ async function saveSettings(silent = false) {
 
   const payload = {
     AI_PROVIDER: document.getElementById("setting-provider") ? document.getElementById("setting-provider").value : "groq",
-    GROQ_TEXT_MODEL: document.getElementById("setting-groq-model") ? document.getElementById("setting-groq-model").value : "llama-3.3-70b-versatile",
-    GROQ_VISION_MODEL: document.getElementById("setting-groq-vision-model") ? document.getElementById("setting-groq-vision-model").value : "llama-3.2-11b-vision-preview",
-    GEMINI_MODEL: document.getElementById("setting-gemini-model") ? document.getElementById("setting-gemini-model").value : "gemini-1.5-flash"
+    GROQ_TEXT_MODEL: document.getElementById("setting-groq-model") ? document.getElementById("setting-groq-model").value : "openai/gpt-oss-120b",
+    GROQ_VISION_MODEL: document.getElementById("setting-groq-vision-model") ? document.getElementById("setting-groq-vision-model").value : "qwen/qwen3.8-27b",
+    GEMINI_MODEL: document.getElementById("setting-gemini-model") ? document.getElementById("setting-gemini-model").value : "gemini-2.5-flash"
   };
 
   // Optional AI keys if user typed new one
@@ -2109,10 +2152,13 @@ async function saveSettings(silent = false) {
         loadTrades();
       }
     } else {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const errBody = await res.json();
+        if (errBody && errBody.detail) errDetail = errBody.detail;
+      } catch (ignore) {}
       if (!silent) {
-        showToast("Backend Tunnel URL saved! Reconnecting...", "success");
-        closeSettingsModal();
-        setTimeout(() => location.reload(), 800);
+        showToast(res.status === 401 ? "Sign in via Google OAuth to save backend settings." : `Failed to save settings: ${errDetail}`, "error");
       }
     }
   } catch (e) {
@@ -2474,7 +2520,7 @@ function updateDashboardCharts(statsData, msgsData) {
   if (chartAssetsInstance) {
     const symbolMap = {};
     msgs.forEach(m => {
-      if (m.symbol && m.intent !== "CHATTER") {
+      if (m.symbol && m.intent !== "CHATTER" && m.intent !== "OTHERS") {
         symbolMap[m.symbol] = (symbolMap[m.symbol] || 0) + 1;
       }
     });
@@ -2507,7 +2553,7 @@ function updateDashboardCharts(statsData, msgsData) {
       let sigs = 0;
       let chat = 0;
       slice.forEach(m => {
-        if (m.intent === "CHATTER") chat++;
+        if (m.intent === "CHATTER" || m.intent === "OTHERS") chat++;
         else sigs++;
       });
       signalCounts.push(sigs);
@@ -2526,7 +2572,7 @@ function updateRecentDashboardWidgets(msgs) {
   const container = document.getElementById("dash-recent-signals");
   if (!container) return;
 
-  const validSignals = (msgs || []).filter(m => m.intent !== "CHATTER" && m.action && m.action !== "NONE").slice(0, 5);
+  const validSignals = (msgs || []).filter(m => m.intent !== "CHATTER" && m.intent !== "OTHERS" && m.action && m.action !== "NONE").slice(0, 5);
   if (validSignals.length === 0) {
     container.innerHTML = `
       <div class="empty-state" style="padding: 1.5rem;">
@@ -2606,7 +2652,7 @@ function updateDashboardNavBadges(msgs) {
 
   if (chatsBadge) chatsBadge.textContent = msgs.length || 0;
   if (signalsBadge) {
-    const validCount = msgs.filter(m => m.intent !== "CHATTER" && m.action && m.action !== "NONE").length;
+    const validCount = msgs.filter(m => m.intent !== "CHATTER" && m.intent !== "OTHERS" && m.action && m.action !== "NONE").length;
     signalsBadge.textContent = validCount || 0;
   }
 }
@@ -2633,7 +2679,7 @@ function renderTradeSignals(msgs) {
   const container = document.getElementById("signals-workspace-container");
   if (!container) return;
 
-  let signals = (msgs || []).filter(m => m.intent !== "CHATTER" && m.action && m.action !== "NONE");
+  let signals = (msgs || []).filter(m => m.intent !== "CHATTER" && m.intent !== "OTHERS" && m.action && m.action !== "NONE");
 
   if (currentSignalsDirectionFilter === "BUY") {
     signals = signals.filter(s => (s.action || "").includes("BUY") || (s.action || "") === "LONG");
@@ -2788,6 +2834,9 @@ function filterLogs(level, btn) {
   entries.forEach(entry => {
     if (level === "ALL") {
       entry.style.display = "flex";
+    } else if (level === "WARN") {
+      const tag = entry.querySelector(".log-level-WARN, .log-level-WARNING");
+      entry.style.display = tag ? "flex" : "none";
     } else {
       const tag = entry.querySelector(`.log-level-${level}`);
       entry.style.display = tag ? "flex" : "none";
@@ -2798,4 +2847,5 @@ function filterLogs(level, btn) {
 // Sync Settings fields
 function syncSettingsFields() {
   loadSystemStatus();
+  loadSettingsFields();
 }

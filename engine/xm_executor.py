@@ -4,8 +4,7 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
-from config import settings
-from database import log_event, get_db
+from database import log_event, get_db, update_trade_outcome
 
 try:
     import MetaTrader5 as mt5
@@ -28,7 +27,20 @@ class XMExecutionEngine:
         self.GOLD_LOTS = 0.02       # Gold: ALWAYS 0.02 lots (exit 0.01 at 1:1)
         self.BTC_LOTS = 0.04        # Bitcoin: ALWAYS 0.04 lots (exit 0.02 at 1:1)
         self.MAX_RISK_USD = 15.0    # Other assets: Max $15 USD risk at Stop Loss
-        self._managed_1to1_tickets: set = set()
+        # Cutoff timestamp so historical closed DB rows before deployment remain untouched
+        self._sync_cutoff_utc = "2026-11-25 19:25:00"
+
+    @staticmethod
+    def _resolve_filling_mode(sym_info: Any) -> int:
+        """Resolves a supported MT5 order filling mode from the symbol's bitmask."""
+        mask = getattr(sym_info, "filling_mode", 0) or 0
+        if mask & 2:
+            return mt5.ORDER_FILLING_IOC
+        if mask & 1:
+            return mt5.ORDER_FILLING_FOK
+        if mask & 4:
+            return mt5.ORDER_FILLING_RETURN
+        return mt5.ORDER_FILLING_IOC
 
     async def initialize(self, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None, path: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -122,31 +134,6 @@ class XMExecutionEngine:
             self.is_mock_mode = True
             await log_event("WARNING", "XM_MT5", f"XM MT5 error: {e}. Operating in XM Demo Sandbox mode.")
             return {"status": "mock", "connected": False, "message": str(e)}
-            self.is_connected = True
-            self.is_mock_mode = False
-            self.account_info = {
-                "login": acc.login,
-                "server": acc.server,
-                "currency": acc.currency,
-                "balance": acc.balance,
-                "equity": acc.equity,
-                "profit": acc.profit,
-                "margin": acc.margin,
-                "margin_free": acc.margin_free,
-                "leverage": acc.leverage,
-                "trade_allowed": acc.trade_allowed,
-                "is_demo": "demo" in (acc.server or "").lower() or acc.trade_mode == 0
-            }
-            await log_event("INFO", "XM_MT5", f"Successfully connected to XM MT5 account #{acc.login} ({acc.server}) - Balance: {acc.balance} {acc.currency}")
-            return {
-                "status": "connected",
-                "connected": True,
-                "account": self.account_info
-            }
-        else:
-            self.is_connected = False
-            self.is_mock_mode = True
-            return {"status": "mock", "connected": False, "message": "Connected to MT5 terminal in guest mode."}
 
     def get_account_status(self) -> Dict[str, Any]:
         """Returns live account health and auto-execution status."""
@@ -472,7 +459,16 @@ class XMExecutionEngine:
 
         trade_id = trade_data.get("trade_id")
         tp_display = final_tp if final_tp is not None else "Open (No TP)"
-        notes = f"XM Order: {action_raw} {lot_size} lots on {xm_symbol} @ {entry}. SL: {final_sl}, TP: {tp_display}"
+
+        if not self.auto_execution_enabled:
+            msg = "XM Auto-Execution is turned OFF in Settings."
+            await log_event("INFO", "XM_EXECUTION", f"Skipped auto-execution for {trade_id}: {msg}")
+            return {
+                "success": False,
+                "status": "AUTO_EXECUTION_DISABLED",
+                "message": msg,
+                "ticket": None
+            }
 
         # 1. LIVE MT5 EXECUTION
         if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
@@ -488,12 +484,22 @@ class XMExecutionEngine:
                 if not sym_info.visible:
                     mt5.symbol_select(xm_symbol, True)
 
+                vol_min = getattr(sym_info, "volume_min", 0.01) or 0.01
+                vol_max = getattr(sym_info, "volume_max", 100.0) or 100.0
+                if float(lot_size) < float(vol_min):
+                    return None, f"Fixed lot size ({lot_size}) is below XM minimum volume ({vol_min}) for {xm_symbol}."
+                if float(lot_size) > float(vol_max):
+                    return None, f"Fixed lot size ({lot_size}) exceeds XM maximum volume ({vol_max}) for {xm_symbol}."
+
                 tick = mt5.symbol_info_tick(xm_symbol)
                 if not tick:
                     return None, f"Symbol {xm_symbol} tick not available"
 
-                price = tick.ask if is_buy else tick.bid
-                digits = getattr(sym_info, 'digits', 2)
+                raw_digits = getattr(sym_info, 'digits', 2)
+                digits = int(raw_digits) if raw_digits is not None else 2
+                price = round(float(tick.ask if is_buy else tick.bid), digits)
+                order_sl = round(float(final_sl), digits)
+                order_tp = round(float(final_tp), digits) if (final_tp is not None and float(final_tp) > 0) else 0.0
 
                 # Ensure Stop Loss is logically on the valid side of live market price.
                 # If market price is ALREADY past the Stop Loss, the signal is STALE/INVALID:
@@ -509,15 +515,7 @@ class XMExecutionEngine:
                     if order_tp > 0.0 and order_tp >= price:
                         order_tp = 0.0
 
-                # Resolve filling mode supported by symbol (IOC vs FOK vs Return)
-                filling = mt5.ORDER_FILLING_IOC
-                if hasattr(sym_info, 'filling_mode'):
-                    if sym_info.filling_mode == 1:
-                        filling = mt5.ORDER_FILLING_FOK
-                    elif sym_info.filling_mode == 2:
-                        filling = mt5.ORDER_FILLING_IOC
-                    elif sym_info.filling_mode == 4:
-                        filling = mt5.ORDER_FILLING_RETURN
+                filling = self._resolve_filling_mode(sym_info)
 
                 request = {
                     "action": mt5.TRADE_ACTION_DEAL,
@@ -672,14 +670,16 @@ class XMExecutionEngine:
                 return False, f"No open MT5 position found for {trade_id}."
 
             p = target_pos
+            sym_info = mt5.symbol_info(p.symbol)
+            raw_digits = getattr(sym_info, 'digits', 2) if sym_info else 2
+            digits = int(raw_digits) if raw_digits is not None else 2
+            vol_min = float(getattr(sym_info, 'volume_min', 0.01) or 0.01) if sym_info else 0.01
+
             total_vol = round(float(p.volume), 2)
             half_vol = round(total_vol / 2.0, 2)
-            if half_vol < 0.01:
-                half_vol = 0.01
+            can_partial_close = (total_vol > vol_min and half_vol >= vol_min and round(total_vol - half_vol, 2) >= vol_min)
 
-            sym_info = mt5.symbol_info(p.symbol)
-            digits = getattr(sym_info, 'digits', 2)
-            entry = float(p.price_open)
+            entry = round(float(p.price_open), digits)
             current_sl = float(p.sl)
             risk_dist = abs(entry - current_sl) if current_sl > 0 else 10.0
             if risk_dist <= 0:
@@ -692,42 +692,41 @@ class XMExecutionEngine:
             if not tick:
                 return False, f"Tick not available for {p.symbol}"
 
-            # Step 1: Close 50% of the volume
-            close_price = tick.bid if is_buy else tick.ask
-            close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
-            filling = mt5.ORDER_FILLING_IOC
-            if hasattr(sym_info, 'filling_mode'):
-                if sym_info.filling_mode == 1:
-                    filling = mt5.ORDER_FILLING_FOK
-                elif sym_info.filling_mode == 2:
-                    filling = mt5.ORDER_FILLING_IOC
-                elif sym_info.filling_mode == 4:
-                    filling = mt5.ORDER_FILLING_RETURN
+            closed_lots = 0.0
+            remaining_lots = total_vol
 
-            close_req = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "position": p.ticket,
-                "symbol": p.symbol,
-                "volume": float(half_vol),
-                "type": close_type,
-                "price": float(close_price),
-                "deviation": 50,
-                "magic": 998811,
-                "comment": f"1:1 Half Exit {trade_id}",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": filling,
-            }
-            close_res = mt5.order_send(close_req)
-            if not close_res or close_res.retcode != mt5.TRADE_RETCODE_DONE:
-                err = close_res.comment if close_res else "Close order failed"
-                return False, f"Partial close failed on #{p.ticket}: {err}"
+            # Step 1: Close 50% of the volume when remaining volume is still valid
+            if can_partial_close:
+                close_price = tick.bid if is_buy else tick.ask
+                close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+                filling = self._resolve_filling_mode(sym_info)
+
+                close_req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": p.ticket,
+                    "symbol": p.symbol,
+                    "volume": float(half_vol),
+                    "type": close_type,
+                    "price": float(close_price),
+                    "deviation": 50,
+                    "magic": 998811,
+                    "comment": f"1:1 Half Exit {trade_id}",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": filling,
+                }
+                close_res = mt5.order_send(close_req)
+                if not close_res or close_res.retcode != mt5.TRADE_RETCODE_DONE:
+                    err = close_res.comment if close_res else "Close order failed"
+                    return False, f"Partial close failed on #{p.ticket}: {err}"
+                closed_lots = half_vol
+                remaining_lots = round(total_vol - half_vol, 2)
 
             # Step 2: Modify SL to Break-Even (Entry) and TP to 1:2
             new_sl = entry
             if is_buy and new_sl >= tick.bid:
-                new_sl = round(tick.bid - 2.0, digits)
+                new_sl = round(tick.bid - (2.0 if digits <= 2 else 0.0002), digits)
             elif not is_buy and new_sl <= tick.ask:
-                new_sl = round(tick.ask + 2.0, digits)
+                new_sl = round(tick.ask + (2.0 if digits <= 2 else 0.0002), digits)
 
             mod_req = {
                 "action": mt5.TRADE_ACTION_SLTP,
@@ -737,12 +736,15 @@ class XMExecutionEngine:
                 "tp": float(tp_1to2),
             }
             mod_res = mt5.order_send(mod_req)
+            if not mod_res or mod_res.retcode != mt5.TRADE_RETCODE_DONE:
+                mod_err = mod_res.comment if mod_res else "SL/TP modify failed"
+                return False, f"1:1 BE SL/TP modification failed on #{p.ticket}: {mod_err}"
 
             return True, {
                 "ticket": p.ticket,
                 "symbol": p.symbol,
-                "closed_lots": half_vol,
-                "remaining_lots": round(total_vol - half_vol, 2),
+                "closed_lots": closed_lots,
+                "remaining_lots": remaining_lots,
                 "new_sl": new_sl,
                 "new_tp_1to2": tp_1to2,
                 "comment": mod_res.comment if mod_res else "OK"
@@ -757,6 +759,24 @@ class XMExecutionEngine:
                     f"SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']})",
                     details=f"Trade {trade_id} -> Runner position: {res_data['remaining_lots']} lots risk-free to 1:2."
                 )
+                try:
+                    async with get_db() as conn:
+                        cur = await conn.execute("SELECT trade_id FROM trades WHERE xm_ticket = ? LIMIT 1", (int(res_data["ticket"]),))
+                        row = await cur.fetchone()
+                        if row:
+                            db_tid = row["trade_id"]
+                            await conn.execute(
+                                "UPDATE trades SET sl = ?, updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?",
+                                (str(res_data["new_sl"]), db_tid)
+                            )
+                            await conn.execute(
+                                """INSERT INTO trade_events (trade_id, event_type, previous_status, new_status, notes)
+                                   VALUES (?, 'PARTIAL_1_TO_1', 'EXECUTED', 'EXECUTED', ?)""",
+                                (db_tid, f"1:1 Target Hit on #{res_data['ticket']}: Exited {res_data['closed_lots']} lots, SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']}).")
+                            )
+                            await conn.commit()
+                except Exception:
+                    pass
                 return {"success": True, "status": "PARTIAL_CLOSED_AND_EXTENDED", "details": res_data}
             else:
                 await log_event("WARNING", "XM_EXECUTION", f"1:1 Partial exit notice for {trade_id}: {res_data}")
@@ -808,14 +828,7 @@ class XMExecutionEngine:
                 return False, f"Tick data unavailable for {p.symbol}"
 
             price = tick.bid if is_buy else tick.ask
-            filling = mt5.ORDER_FILLING_IOC
-            if hasattr(sym_info, 'filling_mode'):
-                if sym_info.filling_mode == 1:
-                    filling = mt5.ORDER_FILLING_FOK
-                elif sym_info.filling_mode == 2:
-                    filling = mt5.ORDER_FILLING_IOC
-                elif sym_info.filling_mode == 4:
-                    filling = mt5.ORDER_FILLING_RETURN
+            filling = self._resolve_filling_mode(sym_info)
 
             close_req = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -925,8 +938,102 @@ class XMExecutionEngine:
                 if res.get("success"):
                     results.append({"ticket": ticket, **res})
             return results
-        except Exception as e:
+        except Exception:
             return []
+
+    async def sync_closed_mt5_trades(self) -> List[Dict[str, Any]]:
+        """
+        Syncs newly executed MT5 positions (created after sync cutoff) when they close
+        via TP, SL, or manual close on MT5 so Watchlist outcomes stay accurate going forward.
+        """
+        if not self.is_connected or not MT5_AVAILABLE or self.is_mock_mode:
+            return []
+
+        try:
+            async with get_db() as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT trade_id, xm_ticket, symbol, action
+                    FROM trades
+                    WHERE status = 'EXECUTED'
+                      AND is_active = 1
+                      AND xm_ticket IS NOT NULL
+                      AND created_at >= ?
+                    """,
+                    (self._sync_cutoff_utc,),
+                )
+                candidates = [dict(r) for r in await cur.fetchall()]
+        except Exception:
+            return []
+
+        if not candidates:
+            return []
+
+        def _sync_check_closed():
+            positions = mt5.positions_get()
+            if positions is None:
+                return []
+            open_tickets = {int(p.ticket) for p in positions}
+            closed_updates = []
+
+            for c in candidates:
+                ticket = int(c["xm_ticket"])
+                if ticket in open_tickets:
+                    continue
+
+                deals = mt5.history_deals_get(position=ticket)
+                if not deals:
+                    continue
+
+                out_deals = [d for d in deals if getattr(d, "entry", None) == 1]
+                if not out_deals:
+                    continue
+
+                total_profit = round(sum(float(getattr(d, "profit", 0.0) or 0.0) for d in out_deals), 2)
+                last_deal = out_deals[-1]
+                close_price = float(getattr(last_deal, "price", 0.0) or 0.0)
+                comment = str(getattr(last_deal, "comment", "") or "").lower()
+
+                if "[tp" in comment:
+                    new_status = "TP_HIT"
+                    outcome = "Take Profit Hit"
+                elif "[sl" in comment:
+                    new_status = "SL_HIT"
+                    outcome = "Stop Loss Hit"
+                elif total_profit >= 0:
+                    new_status = "TP_HIT"
+                    outcome = "Closed in Profit on MT5"
+                else:
+                    new_status = "SL_HIT"
+                    outcome = "Closed at Loss on MT5"
+
+                closed_updates.append({
+                    "trade_id": c["trade_id"],
+                    "ticket": ticket,
+                    "new_status": new_status,
+                    "outcome": outcome,
+                    "profit": total_profit,
+                    "close_price": close_price,
+                    "comment": getattr(last_deal, "comment", "") or ""
+                })
+            return closed_updates
+
+        try:
+            updates = await asyncio.wait_for(asyncio.to_thread(_sync_check_closed), timeout=3.0)
+        except Exception:
+            return []
+
+        for u in updates:
+            pnl_str = f"+${u['profit']:.2f}" if u["profit"] >= 0 else f"-${abs(u['profit']):.2f}"
+            note = f"XM MT5 Ticket #{u['ticket']} closed @ {u['close_price']} ({pnl_str}) [{u['comment'] or u['outcome']}]"
+            await update_trade_outcome(
+                trade_id=u["trade_id"],
+                new_status=u["new_status"],
+                outcome=u["outcome"],
+                notes=note,
+            )
+            await log_event("SIGNAL", "XM_EXECUTION", f"Position #{u['ticket']} ({u['trade_id']}) closed on MT5: {u['outcome']} ({pnl_str})")
+        return updates
 
     async def _record_execution(
         self,

@@ -3,10 +3,9 @@ import secrets
 import asyncio
 import aiosqlite
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Optional, List, Dict, Any
 from config import settings
-from auth import encrypt_credential, decrypt_credential, hash_password, verify_password
+from auth import encrypt_credential, decrypt_credential, hash_password
 
 SENSITIVE_KEYS = {
     "XM_MT5_PASSWORD",
@@ -372,7 +371,9 @@ async def get_messages(
         if intent_filter == "TRADES":
             query += " AND i.is_trade = 1"
         elif intent_filter == "CHATTER":
-            query += " AND i.intent = 'CHATTER'"
+            query += " AND i.intent IN ('CHATTER', 'OTHERS')"
+        elif intent_filter == "UPDATES":
+            query += " AND i.intent IN ('TRADE_UPDATE', 'CLOSE_TRADE')"
         else:
             query += " AND i.intent = ?"
             params.append(intent_filter)
@@ -381,27 +382,6 @@ async def get_messages(
         query += " AND (m.text LIKE ? OR i.symbol LIKE ? OR i.reasoning LIKE ? OR m.trade_id LIKE ?)"
         like_term = f"%{search}%"
         params.extend([like_term, like_term, like_term, like_term])
-
-    query += " ORDER BY m.id DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    async with get_db() as conn:
-        cursor = await conn.execute(query, params)
-        rows = await cursor.fetchall()
-        results = []
-        for r in rows:
-            d = dict(r)
-            if d.get("tp_levels"):
-                try:
-                    d["tp_levels"] = json.loads(d["tp_levels"])
-                except Exception:
-                    d["tp_levels"] = [d["tp_levels"]]
-            else:
-                d["tp_levels"] = []
-            results.append(d)
-        return results
-        like_term = f"%{search}%"
-        params.extend([like_term, like_term, like_term])
 
     query += " ORDER BY m.id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
@@ -430,7 +410,7 @@ async def get_stats() -> Dict[str, Any]:
         cursor = await conn.execute("SELECT COUNT(*) FROM interpretations WHERE is_trade = 1")
         total_trades = (await cursor.fetchone())[0]
 
-        cursor = await conn.execute("SELECT COUNT(*) FROM interpretations WHERE intent = 'CHATTER'")
+        cursor = await conn.execute("SELECT COUNT(*) FROM interpretations WHERE intent IN ('CHATTER', 'OTHERS')")
         total_chatter = (await cursor.fetchone())[0]
 
         cursor = await conn.execute("SELECT AVG(processing_time_ms) FROM interpretations WHERE processing_time_ms > 0")
@@ -759,12 +739,6 @@ async def expire_old_pending_trades(max_age_seconds: int = 7200) -> List[str]:
         if expired_ids:
             await conn.commit()
         return expired_ids
-
-        if message_id:
-            await conn.execute("UPDATE messages SET trade_id = ? WHERE id = ?", (trade_id, message_id))
-            await conn.execute("UPDATE interpretations SET trade_id = ? WHERE message_id = ?", (trade_id, message_id))
-
-        await conn.commit()
 
 async def get_active_trades_for_symbol(symbol: Optional[str]) -> List[Dict[str, Any]]:
     """Returns active or pending trades for a given symbol."""

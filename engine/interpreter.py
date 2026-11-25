@@ -2,8 +2,10 @@ import os
 import re
 import json
 import time
+import asyncio
 from typing import Dict, Any, Optional, List
 from config import settings
+from database import get_all_settings
 from engine.vision_processor import process_and_encode_image, analyze_chart_with_cv
 
 SYSTEM_PROMPT = """You are the AlphaSignal AI Trading & Intent Classifier for the VIP Telegram Channels 'ALPHA PREMIUM' and 'Alpha Trades'.
@@ -164,7 +166,6 @@ def classify_with_context_heuristic(
     history_has_active = False
     history_has_selling = False
     history_has_buying = False
-    history_has_chart = False
     history_symbol = "XAUUSD"
 
     if history_messages and len(history_messages) > 0:
@@ -183,8 +184,6 @@ def classify_with_context_heuristic(
                 history_symbol = "BTCUSDT"
             elif "GBP" in htxt:
                 history_symbol = "GBPUSD"
-            if hm.get("media_path"):
-                history_has_chart = True
 
     # 1. Cancellation detection
     cancel_keywords = [
@@ -450,9 +449,15 @@ async def analyze_message_with_ai(
     """
     Primary AI Intent & Classification Engine.
     Passes 10-message conversational context, image analysis, and pending/active trade context
-    to Groq (qwen/qwen3.8-27b Vision / Llama models) for 3-way classification.
+    to Groq (qwen/qwen3.8-27b Vision / gpt-oss-120b) or Gemini for 3-way classification.
     """
-    active_provider = provider or settings.AI_PROVIDER
+    stored = {}
+    try:
+        stored = await get_all_settings()
+    except Exception:
+        pass
+
+    active_provider = (provider or stored.get("AI_PROVIDER") or settings.AI_PROVIDER or "groq").lower()
     start_time = time.time()
 
     # Resolve relative image path
@@ -462,8 +467,10 @@ async def analyze_message_with_ai(
         if candidate.exists():
             resolved_path = str(candidate)
 
-    # Image presence flag for multimodal context
-    cv_info = {"has_image": True} if resolved_path else None
+    # Run fast local CV check for chart presence / TradingView zones
+    cv_info = None
+    if resolved_path and os.path.exists(resolved_path):
+        cv_info = analyze_chart_with_cv(resolved_path) or {"has_image": True}
 
     # Context Prompt with history and trades
     user_context_prompt = build_context_prompt(
@@ -475,19 +482,32 @@ async def analyze_message_with_ai(
         current_cv_info=cv_info
     )
 
+    groq_key = api_key if (active_provider == "groq" and api_key) else (stored.get("GROQ_API_KEY") or settings.GROQ_API_KEY)
+    gemini_key = api_key if (active_provider == "gemini" and api_key) else (stored.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY)
+    groq_text_model = stored.get("GROQ_TEXT_MODEL") or settings.GROQ_TEXT_MODEL
+    groq_vision_model = stored.get("GROQ_VISION_MODEL") or settings.GROQ_VISION_MODEL
+    gemini_model = stored.get("GEMINI_MODEL") or settings.GEMINI_MODEL
+
     # 1. Groq API
-    groq_key = api_key if (active_provider == "groq" and api_key) else settings.GROQ_API_KEY
     if active_provider == "groq" and groq_key:
         try:
-            return await _call_groq(text, resolved_path, user_context_prompt, groq_key, start_time, history_messages=history_messages)
+            return await _call_groq(
+                text, resolved_path, user_context_prompt, groq_key, start_time,
+                history_messages=history_messages,
+                text_model=groq_text_model,
+                vision_model=groq_vision_model
+            )
         except Exception as e:
-            print(f"[GROQ CLASSIFICATION ERROR] {e}. Falling back to context heuristic.")
+            print(f"[GROQ CLASSIFICATION ERROR] {e}. Falling back.")
 
-    # 2. Gemini API
-    gemini_key = api_key if (active_provider == "gemini" and api_key) else settings.GEMINI_API_KEY
-    if active_provider == "gemini" and gemini_key:
+    # 2. Gemini API (selected or fallback if Groq failed)
+    if (active_provider == "gemini" or (active_provider == "groq" and not groq_key)) and gemini_key:
         try:
-            return await _call_gemini(text, resolved_path, user_context_prompt, gemini_key, start_time, history_messages=history_messages)
+            return await _call_gemini(
+                text, resolved_path, user_context_prompt, gemini_key, start_time,
+                history_messages=history_messages,
+                gemini_model=gemini_model
+            )
         except Exception as e:
             print(f"[GEMINI CLASSIFICATION ERROR] {e}. Falling back to context heuristic.")
 
@@ -512,18 +532,21 @@ async def _call_groq(
     user_context_prompt: str,
     api_key: str,
     start_time: float,
-    history_messages: Optional[List[Dict[str, Any]]] = None
+    history_messages: Optional[List[Dict[str, Any]]] = None,
+    text_model: Optional[str] = None,
+    vision_model: Optional[str] = None
 ) -> Dict[str, Any]:
     from groq import Groq
     client = Groq(api_key=api_key)
 
     # Multimodal vision path if image attached
     if image_path and os.path.exists(image_path):
-        vision_model = getattr(settings, "GROQ_VISION_MODEL", "qwen/qwen3.8-27b") or "qwen/qwen3.8-27b"
+        v_model = vision_model or getattr(settings, "GROQ_VISION_MODEL", "qwen/qwen3.8-27b") or "qwen/qwen3.8-27b"
         try:
-            mime_type, b64_img = process_and_encode_image(image_path)
-            completion = client.chat.completions.create(
-                model=vision_model,
+            mime_type, b64_img = await asyncio.to_thread(process_and_encode_image, image_path)
+            completion = await asyncio.to_thread(
+                client.chat.completions.create,
+                model=v_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": [
@@ -537,13 +560,13 @@ async def _call_groq(
             raw_text = completion.choices[0].message.content
             parsed = json.loads(raw_text)
             elapsed = int((time.time() - start_time) * 1000)
-            return _normalize_ai_response(parsed, elapsed, f"Groq ({vision_model} Vision)", raw_text=text, history_messages=history_messages)
+            return _normalize_ai_response(parsed, elapsed, f"Groq ({v_model} Vision)", raw_text=text, history_messages=history_messages)
         except Exception as err:
             print(f"[GROQ VISION API ERROR] {err}. Proceeding with text context.")
 
-    # Text Groq candidate models
+    # Text Groq candidate models (only active Groq models)
     model_candidates = [
-        getattr(settings, "GROQ_TEXT_MODEL", "openai/gpt-oss-120b"),
+        text_model or getattr(settings, "GROQ_TEXT_MODEL", "openai/gpt-oss-120b"),
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
         "qwen/qwen3.8-27b"
@@ -554,7 +577,8 @@ async def _call_groq(
     last_err = None
     for model_name in model_candidates:
         try:
-            completion = client.chat.completions.create(
+            completion = await asyncio.to_thread(
+                client.chat.completions.create,
                 model=model_name,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -580,17 +604,18 @@ async def _call_gemini(
     user_context_prompt: str,
     api_key: str,
     start_time: float,
-    history_messages: Optional[List[Dict[str, Any]]] = None
+    history_messages: Optional[List[Dict[str, Any]]] = None,
+    gemini_model: Optional[str] = None
 ) -> Dict[str, Any]:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     from PIL import Image
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=getattr(settings, "GEMINI_MODEL", "gemini-1.5-flash-lite"),
-        generation_config={"response_mime_type": "application/json", "temperature": 0.1},
-        system_instruction=SYSTEM_PROMPT
-    )
+    client = genai.Client(api_key=api_key)
+    configured = gemini_model or getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
+    candidates = [configured, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+    seen = set()
+    candidates = [m for m in candidates if m and not (m in seen or seen.add(m))]
 
     contents = []
     if image_path and os.path.exists(image_path):
@@ -598,11 +623,29 @@ async def _call_gemini(
         contents.append(img)
     contents.append(user_context_prompt)
 
-    response = model.generate_content(contents)
-    raw_text = response.text
-    parsed = json.loads(raw_text)
-    elapsed = int((time.time() - start_time) * 1000)
-    return _normalize_ai_response(parsed, elapsed, f"Gemini ({settings.GEMINI_MODEL})", raw_text=text, history_messages=history_messages)
+    last_err = None
+    for model_name in candidates:
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.1
+                )
+            )
+            raw_text = response.text
+            parsed = json.loads(raw_text)
+            elapsed = int((time.time() - start_time) * 1000)
+            return _normalize_ai_response(parsed, elapsed, f"Gemini ({model_name})", raw_text=text, history_messages=history_messages)
+        except Exception as e:
+            last_err = e
+            continue
+
+    if last_err:
+        raise last_err
 
 def _normalize_ai_response(
     parsed: Dict[str, Any],
@@ -616,24 +659,35 @@ def _normalize_ai_response(
     Strictly preserves the AI's semantic understanding of the owner's true intent
     without clobbering it with naive regex or substring keywords.
     """
-    intent = parsed.get("intent", "OTHERS")
+    raw_intent = str(parsed.get("intent") or "OTHERS").strip()
+    intent = raw_intent
     if intent not in ["NEW_TRADE", "TRADE_UPDATE", "OTHERS"]:
         if intent in ["CHATTER"]:
             intent = "OTHERS"
         elif intent in ["PENDING_CONFIRMATION", "trade_setup", "new_trade", "TRADE_SETUP", "NEW_SETUP"]:
             intent = "NEW_TRADE"
-            if intent in ["PENDING_CONFIRMATION"]:
+            if raw_intent == "PENDING_CONFIRMATION":
                 parsed["is_active_now"] = False
         else:
             intent = "OTHERS"
 
     # Truly respect AI's semantic decision on whether this is an immediate live execution
     # or a conditional plan/idea (NO naive regex keyword overrides!):
-    is_active_now = bool(parsed.get("is_active_now", False))
+    is_active_now = bool(parsed.get("is_active_now", False)) if intent != "OTHERS" else False
 
-    # Action (BUY vs SELL)
-    action = (parsed.get("action") or "").upper().strip()
-    if not action or action not in ["BUY", "SELL"]:
+    # Action (BUY vs SELL vs NONE for non-trades / non-directional updates)
+    raw_action = (parsed.get("action") or "").upper().strip()
+    if intent == "OTHERS":
+        action = "NONE"
+    elif intent == "TRADE_UPDATE" and raw_action not in ["BUY", "SELL"]:
+        action = "NONE"
+    elif raw_action in ["BUY", "SELL"]:
+        action = raw_action
+    elif raw_action == "LONG":
+        action = "BUY"
+    elif raw_action == "SHORT":
+        action = "SELL"
+    else:
         action = "BUY"
 
     entry_price = str(parsed.get("entry_price")).replace(",", "") if parsed.get("entry_price") is not None else None
@@ -653,31 +707,31 @@ def _normalize_ai_response(
     else:
         tp_levels = [str(x).replace(",", "") for x in tp_levels if x is not None]
 
-    # Mathematical direction verification (immutable trading law)
-    # If SL is above entry, it is mathematically a SELL; if SL is below entry, it is BUY.
-    if sl:
-        try:
-            sl_f = float(sl)
-            ref_f = float(entry_price) if entry_price else (float(tp_levels[0]) if tp_levels else None)
-            if ref_f is not None and ref_f > 0:
-                if sl_f > ref_f:
-                    action = "SELL"
-                elif sl_f < ref_f:
-                    action = "BUY"
-        except Exception:
-            pass
+    # Mathematical direction verification (immutable trading law) for trades
+    if intent == "NEW_TRADE":
+        if sl:
+            try:
+                sl_f = float(sl)
+                ref_f = float(entry_price) if entry_price else (float(tp_levels[0]) if tp_levels else None)
+                if ref_f is not None and ref_f > 0:
+                    if sl_f > ref_f:
+                        action = "SELL"
+                    elif sl_f < ref_f:
+                        action = "BUY"
+            except Exception:
+                pass
 
-    if entry_price and tp_levels:
-        try:
-            ent_f = float(entry_price)
-            tp_f = float(tp_levels[0])
-            if ent_f > 0 and tp_f > 0:
-                if tp_f < ent_f and action == "BUY":
-                    action = "SELL"
-                elif tp_f > ent_f and action == "SELL":
-                    action = "BUY"
-        except Exception:
-            pass
+        if entry_price and tp_levels:
+            try:
+                ent_f = float(entry_price)
+                tp_f = float(tp_levels[0])
+                if ent_f > 0 and tp_f > 0:
+                    if tp_f < ent_f and action == "BUY":
+                        action = "SELL"
+                    elif tp_f > ent_f and action == "SELL":
+                        action = "BUY"
+            except Exception:
+                pass
 
     is_trade = 1 if intent in ["NEW_TRADE", "TRADE_UPDATE"] else 0
 
@@ -691,7 +745,7 @@ def _normalize_ai_response(
         "intent": intent,
         "symbol": clean_sym,
         "action": action,
-        "order_type": (parsed.get("order_type") or "MARKET").upper(),
+        "order_type": ("NONE" if intent == "OTHERS" else (parsed.get("order_type") or "MARKET").upper()),
         "entry_price": entry_price,
         "sl": sl,
         "tp_levels": tp_levels,

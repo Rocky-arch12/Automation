@@ -2,7 +2,7 @@ import json
 import re
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from database import (
     create_trade,
     update_trade_outcome,
@@ -303,17 +303,18 @@ async def correlate_and_process_trade(
                 return {"trade_id": target_tid, "action": "ACTIVATED_AND_EXECUTED", "ticket": ticket, "lots": lots, "xm_response": xm_res}
             else:
                 err_msg = xm_res.get("message", "Unknown MT5 error")
+                is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
                 await update_trade_outcome(
                     trade_id=target_tid,
-                    new_status="FAILED_EXECUTION",
-                    outcome=f"XM MT5: {err_msg}",
-                    notes=f"Execution rejected by MT5 terminal: {err_msg}",
+                    new_status="PENDING" if is_disabled else "FAILED_EXECUTION",
+                    outcome="XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
+                    notes=err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}",
                     message_id=message_id,
                     new_sl=str(final_sl),
                     xm_response=json.dumps(xm_res)
                 )
                 await update_message_trade_id(message_id, target_tid)
-                return {"trade_id": target_tid, "action": "EXECUTION_FAILED", "reason": err_msg}
+                return {"trade_id": target_tid, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
 
     # -------------------------------------------------------------
     # 1. NEW TRADE SETUP
@@ -394,7 +395,7 @@ async def correlate_and_process_trade(
                 exec_price = xm_res.get("price") or entry_float
 
                 if xm_res.get("success"):
-                    tid = await create_trade({
+                    await create_trade({
                         "trade_id": trade_id,
                         "symbol": symbol,
                         "action": action,
@@ -417,7 +418,8 @@ async def correlate_and_process_trade(
                     return {"trade_id": trade_id, "action": "EXECUTED_ON_XM", "ticket": ticket, "lots": lots, "xm_response": xm_res}
                 else:
                     err_msg = xm_res.get("message", "XM MT5 order failed")
-                    tid = await create_trade({
+                    is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
+                    await create_trade({
                         "trade_id": trade_id,
                         "symbol": symbol,
                         "action": action,
@@ -425,20 +427,20 @@ async def correlate_and_process_trade(
                         "entry_price": str(entry_float) if entry_float else "CMP",
                         "sl": str(final_sl),
                         "tp_levels": [str(final_tp)] if final_tp else [],
-                        "status": "FAILED_EXECUTION",
-                        "outcome": f"XM MT5: {err_msg}",
+                        "status": "PENDING" if is_disabled else "FAILED_EXECUTION",
+                        "outcome": "XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
                         "initial_message_id": message_id,
                         "channel_id": channel_id,
                         "channel_title": channel_title,
                         "xm_response": json.dumps(xm_res),
-                        "pnl_notes": f"Execution rejected by MT5 terminal: {err_msg}"
+                        "pnl_notes": err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}"
                     })
                     await update_message_trade_id(message_id, trade_id)
-                    return {"trade_id": trade_id, "action": "EXECUTION_FAILED", "reason": err_msg}
+                    return {"trade_id": trade_id, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
 
             else:
                 # Active trade announced without SL yet (e.g. "Active trade" or chart sent first)
-                tid = await create_trade({
+                await create_trade({
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "action": action,
@@ -470,7 +472,7 @@ async def correlate_and_process_trade(
 
         # Case B: Pending setup (Waiting for Tap / Confirmation candle)
         else:
-            tid = await create_trade({
+            await create_trade({
                 "trade_id": trade_id,
                 "symbol": symbol,
                 "action": action,
@@ -586,6 +588,8 @@ async def correlate_and_process_trade(
                     t_tps = tp_levels_raw
                 else:
                     t_tps = tp_levels
+                if not t_tps and tp_levels:
+                    t_tps = tp_levels
 
                 is_valid, final_sl, final_tp, val_msg = xm_executor.validate_and_enforce_sl_tp(
                     symbol=t_symbol,
@@ -639,16 +643,17 @@ async def correlate_and_process_trade(
                     return {"trade_id": target_tid, "action": "ACTIVATED_AND_EXECUTED", "ticket": ticket, "lots": lots, "xm_response": xm_res}
                 else:
                     err_msg = xm_res.get("message", "XM MT5 order failed")
+                    is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
                     await update_trade_outcome(
                         trade_id=target_tid,
-                        new_status="FAILED_EXECUTION",
-                        outcome=f"XM MT5: {err_msg}",
-                        notes=f"Execution rejected by MT5 terminal: {err_msg}",
+                        new_status="PENDING" if is_disabled else "FAILED_EXECUTION",
+                        outcome="XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
+                        notes=err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}",
                         message_id=message_id,
                         new_sl=str(final_sl),
                         xm_response=json.dumps(xm_res)
                     )
-                    return {"trade_id": target_tid, "action": "EXECUTION_FAILED", "reason": err_msg}
+                    return {"trade_id": target_tid, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
 
             elif update_type == "CANCEL":
                 await update_trade_outcome(

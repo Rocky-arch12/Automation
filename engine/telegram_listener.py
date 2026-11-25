@@ -3,8 +3,7 @@ import os
 import re
 import uuid
 from datetime import datetime
-from typing import Optional, Callable, Any, List
-from pathlib import Path
+from typing import Optional, Callable, Any
 from config import settings
 from database import (
     save_message,
@@ -331,13 +330,28 @@ class TelegramListenerManager:
         """Fetches joined Telegram channels and groups so the user can select multiple sources."""
         from telethon import TelegramClient
 
+        # Reuse active Telethon client if connected to avoid SQLite session file locking
+        if self.client and self.client.is_connected() and await self.client.is_user_authorized():
+            dialogs_list = []
+            async for dialog in self.client.iter_dialogs(limit=100):
+                if dialog.is_channel or dialog.is_group:
+                    dialogs_list.append({
+                        "id": str(dialog.id),
+                        "title": dialog.name or "Untitled Chat",
+                        "type": "channel" if dialog.is_channel else "group",
+                        "username": getattr(dialog.entity, "username", None) or "",
+                        "unread_count": getattr(dialog, "unread_count", 0)
+                    })
+            return dialogs_list
+
         aid_val = api_id or os.getenv("TELEGRAM_API_ID")
         aid = int(aid_val) if aid_val else None
         ahash = str(api_hash or os.getenv("TELEGRAM_API_HASH") or "").strip()
         if not aid or not ahash:
             return []
 
-        client = TelegramClient(session_name, aid, ahash)
+        session_path = str(settings.BASE_DIR / session_name)
+        client = TelegramClient(session_path, aid, ahash)
         await client.connect()
 
         if not await client.is_user_authorized():
@@ -370,7 +384,7 @@ class TelegramListenerManager:
             await self.stop_listener()
 
         from telethon import TelegramClient, events
-        from telethon.tl.types import MessageMediaPhoto
+        from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
         aid_val = api_id or os.getenv("TELEGRAM_API_ID")
         aid = int(aid_val) if aid_val else None
@@ -378,7 +392,7 @@ class TelegramListenerManager:
         if not aid or not ahash:
             raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be configured in Settings or .env")
 
-        session_file = "alpha_session"
+        session_file = str(settings.BASE_DIR / "alpha_session")
         client = TelegramClient(session_file, aid, ahash)
         await client.connect()
 
@@ -393,17 +407,23 @@ class TelegramListenerManager:
         target_set = set()
         if target_channel:
             if isinstance(target_channel, str):
-                target_set = {s.strip().lower() for s in target_channel.split(",") if s.strip()}
+                target_set = {s.strip().lower().lstrip("@") for s in target_channel.split(",") if s.strip()}
             elif isinstance(target_channel, list):
-                target_set = {str(s).strip().lower() for s in target_channel if str(s).strip()}
+                target_set = {str(s).strip().lower().lstrip("@") for s in target_channel if str(s).strip()}
 
         async for dialog in client.iter_dialogs():
             dname = (dialog.name or "").lower()
             did = str(dialog.id).lower()
+            did_raw = did[4:] if did.startswith("-100") else did.lstrip("-")
             duser = (getattr(dialog.entity, "username", "") or "").lower()
 
             if target_set:
-                if did in target_set or dname in target_set or (duser and duser in target_set):
+                if (
+                    did in target_set
+                    or did_raw in target_set
+                    or dname in target_set
+                    or (duser and duser in target_set)
+                ):
                     matched_entities.append(dialog.entity)
                     matched_titles.append(dialog.name)
             else:
@@ -412,6 +432,21 @@ class TelegramListenerManager:
                     matched_entities.append(dialog.entity)
                     matched_titles.append(dialog.name)
                     break
+
+        if target_set and not matched_entities:
+            for item in target_set:
+                try:
+                    ent_key = int(item) if re.fullmatch(r"-?\d+", item) else item
+                    ent = await client.get_entity(ent_key)
+                    if ent:
+                        matched_entities.append(ent)
+                        matched_titles.append(getattr(ent, "title", None) or str(item))
+                except Exception:
+                    pass
+
+        if target_set and not matched_entities:
+            await client.disconnect()
+            raise RuntimeError(f"Configured Telegram channel(s) not found: {target_channel}. Refusing to listen to all DMs/chats.")
 
         chat_filter = matched_entities if matched_entities else None
         active_title = ", ".join(matched_titles) if matched_titles else (target_channel or "All Joined Chats")
@@ -428,7 +463,11 @@ class TelegramListenerManager:
             media_type = "text"
             media_path = None
 
-            if msg.media and isinstance(msg.media, MessageMediaPhoto):
+            is_image_doc = (
+                isinstance(msg.media, MessageMediaDocument)
+                and getattr(msg.media.document, "mime_type", "").startswith("image/")
+            )
+            if msg.media and (isinstance(msg.media, MessageMediaPhoto) or is_image_doc):
                 media_type = "photo"
                 filename = f"live_{uuid.uuid4().hex[:8]}.jpg"
                 dest_path = settings.UPLOADS_DIR / filename

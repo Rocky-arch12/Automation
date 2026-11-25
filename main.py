@@ -10,9 +10,9 @@ from logging.handlers import RotatingFileHandler
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException, Depends, Header, Request, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, HTTPException, Depends, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -37,22 +37,20 @@ _root_logger.addHandler(_file_handler)
 for _uvi_logger in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     logging.getLogger(_uvi_logger).addHandler(_file_handler)
 from auth import (
-    create_access_token, decode_access_token,
+    create_access_token,
     get_current_user, get_current_user_optional, get_current_authorized_user,
-    is_email_authorized, ALLOWED_GOOGLE_EMAILS,
-    mask_credential, hash_password, verify_password,
-    encrypt_credential, decrypt_credential,
+    is_email_authorized,
+    mask_credential, decrypt_credential,
     set_auth_cookie, clear_auth_cookie
 )
 from database import (
     init_db, get_db, get_messages, get_stats, get_logs,
     get_all_settings, set_setting, set_settings_bulk, log_event, clear_all_data,
     save_message, save_interpretation,
-    get_all_trades, get_trade_timeline, get_trade_by_id, update_trade_outcome,
+    get_all_trades, get_trade_timeline, update_trade_outcome,
     expire_old_pending_trades, purge_old_system_logs,
     save_api_log, get_api_logs, purge_old_api_logs,
-    create_user, get_user_by_email, get_user_by_id, get_user_all_settings,
-    get_user_setting, set_user_setting, SENSITIVE_KEYS
+    create_user, get_user_by_email, get_user_all_settings
 )
 from engine.trade_manager import TRADE_OUTCOMES
 from engine.telegram_listener import listener_manager
@@ -256,17 +254,18 @@ async def lifespan(app: FastAPI):
             except Exception as ex:
                 print(f"[LISTENER WATCHDOG WARNING] {ex}")
 
-    # Background worker: 5-Second 1:1 Auto-Management (Book 50% lots, drag SL to CTC/Entry)
+    # Background worker: 5-Second 1:1 Auto-Management & Closed Deal Sync
     async def _xm_1to1_worker():
         while True:
             try:
                 await asyncio.sleep(5)
                 if xm_executor.is_connected:
                     managed = await xm_executor.check_and_manage_1to1_positions()
-                    if managed:
+                    closed = await xm_executor.sync_closed_mt5_trades()
+                    if managed or closed:
                         await ws_manager.broadcast({
                             "type": "XM_POSITIONS_UPDATE",
-                            "data": managed
+                            "data": {"managed": managed, "closed": closed}
                         })
             except asyncio.CancelledError:
                 break
@@ -402,8 +401,9 @@ async def api_audit_middleware(request: Request, call_next):
 
 # Mount Uploads & Sample Signals directories
 app.mount("/uploads", StaticFiles(directory=str(settings.UPLOADS_DIR)), name="uploads")
-if os.path.exists("sample_signals"):
-    app.mount("/sample_signals", StaticFiles(directory="sample_signals"), name="sample_signals")
+_sample_dir = settings.BASE_DIR / "sample_signals"
+if _sample_dir.exists():
+    app.mount("/sample_signals", StaticFiles(directory=str(_sample_dir)), name="sample_signals")
 
 # WebSocket Endpoint for real-time live updates
 @app.websocket("/ws")
@@ -438,15 +438,25 @@ async def ping_endpoint():
         "timestamp": datetime.utcnow().isoformat(),
         "listener_running": listener_manager.is_running,
         "listener_mode": listener_manager.active_mode,
-        "xm_connected": getattr(xm_executor, "connected", False)
+        "xm_connected": getattr(xm_executor, "is_connected", False)
     }
 
 @app.get("/api/status")
 async def get_system_status():
     db_stats = await get_stats()
     stored_settings = await get_all_settings()
+    ai_provider = (stored_settings.get("AI_PROVIDER") or settings.AI_PROVIDER or "groq").lower()
     has_groq = bool(stored_settings.get("GROQ_API_KEY") or settings.GROQ_API_KEY)
     has_gemini = bool(stored_settings.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY)
+
+    if ai_provider == "gemini" and has_gemini:
+        ai_mode = "LLM (Gemini)"
+    elif has_groq:
+        ai_mode = "LLM (Groq)"
+    elif has_gemini:
+        ai_mode = "LLM (Gemini)"
+    else:
+        ai_mode = "Smart Heuristic Engine (Free Fallback)"
 
     return {
         "status": "online",
@@ -457,12 +467,13 @@ async def get_system_status():
             "channel_id": stored_settings.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
         },
         "ai": {
-            "provider": stored_settings.get("AI_PROVIDER") or settings.AI_PROVIDER,
+            "provider": ai_provider,
             "has_groq_key": has_groq,
             "has_gemini_key": has_gemini,
             "text_model": stored_settings.get("GROQ_TEXT_MODEL") or settings.GROQ_TEXT_MODEL,
             "vision_model": stored_settings.get("GROQ_VISION_MODEL") or settings.GROQ_VISION_MODEL,
-            "mode": "LLM (Groq)" if has_groq else ("LLM (Gemini)" if has_gemini else "Smart Heuristic Engine (Free Fallback)")
+            "gemini_model": stored_settings.get("GEMINI_MODEL") or settings.GEMINI_MODEL,
+            "mode": ai_mode
         },
         "stats": db_stats
     }
@@ -693,7 +704,7 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
             avatar = id_info.get("picture") or ""
             if email and id_info.get("email_verified") in [True, "true", "True"]:
                 verified = True
-        except Exception as ex:
+        except Exception:
             pass
 
         # B. Try Google tokeninfo HTTP endpoint
@@ -708,7 +719,7 @@ async def google_oauth_login(payload: GoogleAuthRequest, response: Response):
                     avatar = gdata.get("picture") or ""
                     if email and str(gdata.get("email_verified", "")).lower() == "true":
                         verified = True
-            except Exception as ex:
+            except Exception:
                 pass
 
         # C. Fallback for Google JWT verification (when origin/network prevents Google callback)
@@ -853,8 +864,17 @@ async def update_settings_endpoint(payload: SettingsUpdate, user: dict = Depends
     data = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None and v != ""}
     if data:
         await set_settings_bulk(data, user_id=user_id)
-        if user_id == "default":
-            for field, val in data.items():
+        if user_id != "default":
+            await set_settings_bulk(data, user_id="default")
+        for field, val in data.items():
+            if field == "XM_MT5_LOGIN":
+                try:
+                    settings.XM_MT5_LOGIN = int(val)
+                except Exception:
+                    pass
+            elif field == "XM_AUTO_EXECUTION":
+                settings.XM_AUTO_EXECUTION = str(val).lower() in ["true", "1", "yes"]
+            elif hasattr(settings, field):
                 setattr(settings, field, val)
 
     # In-memory XM executor updates
@@ -997,16 +1017,17 @@ async def toggle_xm_auto_execution(enabled: bool = Query(...), user: dict = Depe
     return {"status": "success", "auto_execution": enabled}
 
 # Serve Frontend static directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
+_static_dir = settings.BASE_DIR / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 @app.get("/style.css")
 async def serve_style():
-    return FileResponse("static/style.css")
+    return FileResponse(str(_static_dir / "style.css"))
 
 @app.get("/app.js")
 async def serve_app_js():
-    return FileResponse("static/app.js")
+    return FileResponse(str(_static_dir / "app.js"))
 
 @app.get("/")
 async def serve_index():
-    return FileResponse("static/index.html")
+    return FileResponse(str(_static_dir / "index.html"))
