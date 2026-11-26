@@ -3,6 +3,7 @@ import re
 import json
 import time
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 from config import settings
 from database import get_all_settings
@@ -28,12 +29,15 @@ The channel owner communicates in English, Hindi, and Hinglish. Understand the n
         * Messages like "RISKY HAI TRY KR SKTE HO HALF LOTS SE" or "Small risk hai" are intentional active trades ("is_active_now": true).
 
    b. "TRADE_UPDATE" (Managing an Existing Trade):
-      - "ACTIVATE": Owner explicitly activates a recent pending setup (e.g. "Level tapped now active", "Confirm candle ban gayi active").
+      - "ACTIVATE": Owner EXPLICITLY activates a recent pending setup or signals immediate confirmation (e.g. "Level tapped now active", "Confirm candle ban gayi active", "5 min engulfing per active kr dena\nActive").
+        * IMPORTANT: If the previous setup in history is already CANCELLED / SL_HIT / TP_HIT (or >2 hours old) and the owner sends a fresh chart with Entry/SL/TP and "Active", classify as "NEW_TRADE" with "is_active_now": true (and "target_trade_id": null)!
       - "CANCEL": Owner cancels a setup ("Cancel this level", "Active mat krna").
-      - "INFO": Commentary on an already running trade ("1:1 done move SL to BE", "Running 100 pips", "Book partials here").
+      - "INFO": Commentary or level touch alert on a setup/running trade:
+        * "Level tapped" / "Level taped" / "Zone tapped" ALONE (without words like "active", "enter", "executed") ONLY means price reached the watchlist zone and is still awaiting candle confirmation -> MUST be "update_type": "INFO" and "is_active_now": false (NEVER "ACTIVATE"!).
+        * Running trade commentary ("1:1 done move SL to BE", "Running 100 pips", "Book partials here", "TP1 HIT AGAIN").
 
    c. "OTHERS" (Non-Actionable Content - NEVER Execute as a Trade!):
-      - Profit celebrations / recaps ("200 pips boom 🚀", "250 pips done guys 😂", "Gold flying 💸").
+      - Profit celebrations / recaps ("200 pips boom 🚀", "250 pips done guys 😂", "Gold flying 💸", "40 PIPS DONE", "110 PIPS DONE").
       - Promotional affiliate marketing, coupon codes, VIP ads (e.g. "🚨 FUNDEDNOW LIMITED TIME ALERT 🚨", "Coupon code Alpha10", "Prop firm discount").
       - YouTube livestream links ("LIVE AFTER 3 DAYS JOIN FAST").
       - News screenshots, general greetings ("Good morning traders"), or casual channel banter.
@@ -41,20 +45,18 @@ The channel owner communicates in English, Hindi, and Hinglish. Understand the n
 
 2. DYNAMIC ASSET & SYMBOL EXTRACTION:
    - The owner trades multiple instruments: Gold, Forex pairs (USDCHF, EURUSD, GBPUSD, USDJPY, USDCAD, AUDUSD, NZDUSD, etc.), Crypto (BTC, ETH), and Indices (US30, NAS100).
-   - ALWAYS extract the exact symbol the owner specifies! E.g. if the owner says "BUY AFTER CROSSING THIS LEVEL IN USDCHF", symbol MUST BE "USDCHF". NEVER default to Gold when a specific currency pair is named!
+   - ALWAYS extract the exact symbol the owner specifies or shown in the chart top-left header (e.g. "Gold Spot" -> "XAUUSD", "British Pound / U.S. Dollar" -> "GBPUSD", "Bitcoin / U.S. Dollar" -> "BTCUSD"). NEVER default to Gold when a specific pair is named!
    - Only if NO symbol is mentioned in the text or chart, and trade parameters are given in the Gold channel, use "XAUUSD".
 
 3. MATHEMATICAL DIRECTION VALIDATION:
    - If SL > Entry or SL > TP (SL is HIGHER than entry/target) -> Action MUST BE "SELL" (Short).
    - If SL < Entry or SL < TP (SL is LOWER than entry/target) -> Action MUST BE "BUY" (Long).
 
-4. CHART POSITION TOOL EXTRACTION:
+4. CHART POSITION TOOL & CALLOUT EXTRACTION:
    - When a TradingView screenshot is attached:
-     * Red box/label on price scale = STOP LOSS (SL).
-     * Gray box/label = ENTRY price.
-     * Green box/label = TAKE PROFIT (TP).
-     * If Red box is at the TOP and Green box is at the BOTTOM -> SELL.
-     * If Green box is at the TOP and Red box is at the BOTTOM -> BUY.
+     * Read ONLY the numbers visibly printed inside THIS attached image! NEVER copy or hallucinate prices from earlier messages in history.
+     * For Long/Short Position Tool screenshots: Red box/label on price scale = STOP LOSS (SL); Gray box/label = ENTRY price; Green box/label = TAKE PROFIT (TP). Red on TOP + Green on BOTTOM = SELL; Green on TOP + Red on BOTTOM = BUY.
+     * For conditional zone/level screenshots (without Long/Short boxes): read the white rectangular price callout balloon (e.g. "3,564.02" or "1.31146") pointing to the shaded zone as "entry_price", and leave "sl" and "tp" as null unless explicitly shown.
 
 Respond strictly with a valid JSON object matching this schema:
 {
@@ -96,7 +98,8 @@ def build_context_prompt(
             ent = pt.get("entry_price")
             sl = pt.get("sl")
             tp = pt.get("tp_levels")
-            lines.append(f"- ID: {t_id} | Symbol: {sym} | Action: {act} | Entry: {ent} | SL: {sl} | TP: {tp} | Status: PENDING")
+            st = pt.get("status", "PENDING")
+            lines.append(f"- ID: {t_id} | Symbol: {sym} | Action: {act} | Entry: {ent} | SL: {sl} | TP: {tp} | Status: {st}")
     else:
         lines.append("- (No pending trade setups in this channel)")
     lines.append("")
@@ -119,12 +122,22 @@ def build_context_prompt(
 
     # 3. Past 10 Messages
     lines.append("RECENT CHANNEL HISTORY (Last up to 10 messages in chronological order):")
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
     if history_messages:
         for idx, m in enumerate(history_messages, 1):
             s_name = m.get("sender") or "Owner"
             m_text = (m.get("text") or "").strip()
-            time_str = str(m.get("created_at") or "")[11:16]
-            tid = f" [Linked Trade: {m.get('trade_id')}]" if m.get("trade_id") else ""
+            raw_created = str(m.get("created_at") or "")
+            time_str = raw_created[11:16]
+            try:
+                dt_utc = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
+                if dt_utc.tzinfo is None:
+                    dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+                time_str = dt_utc.astimezone(ist_tz).strftime("%H:%M IST")
+            except Exception:
+                pass
+            t_status = m.get("trade_status")
+            tid = f" [Linked Trade: {m.get('trade_id')} ({t_status or 'LINKED'})]" if m.get("trade_id") else ""
             img_note = ""
             if m.get("media_path"):
                 if m.get("symbol") and m.get("action"):
@@ -140,10 +153,10 @@ def build_context_prompt(
     lines.append("CURRENT INCOMING MESSAGE TO CLASSIFY:")
     lines.append(f"Text: \"{text or '[Chart Screenshot Broadcast]'}\"")
     if current_cv_info:
-        lines.append("Attached Chart Screenshot: Inspect the TradingView Long/Short Position Tool and right-hand price axis labels.")
+        lines.append("Attached Chart Screenshot: Inspect the TradingView Long/Short Position Tool, white price callout balloons, and right-hand price axis labels.")
         lines.append("- Visual Tool Rule: Red box on TOP / Green box on BOTTOM = SELL (Short). Green box on TOP / Red box on BOTTOM = BUY (Long).")
         lines.append("- Mathematical Price Rule: If SL > Entry or SL > TP -> Action MUST be SELL. If SL < Entry or SL < TP -> Action MUST be BUY.")
-        lines.append("CRITICAL: Extract the Stop Loss (red label), Entry (gray label), and Take Profit (green/cyan label) from the right-hand vertical price axis labels.")
+        lines.append("CRITICAL: Read the exact digits printed in THIS chart screenshot (Stop Loss red label, Entry gray label or white callout balloon, Take Profit green label). NEVER reuse prices from earlier history messages.")
 
     return "\n".join(lines)
 
@@ -495,13 +508,14 @@ async def analyze_message_with_ai(
                 text, resolved_path, user_context_prompt, groq_key, start_time,
                 history_messages=history_messages,
                 text_model=groq_text_model,
-                vision_model=groq_vision_model
+                vision_model=groq_vision_model,
+                has_gemini_fallback=bool(gemini_key)
             )
         except Exception as e:
             print(f"[GROQ CLASSIFICATION ERROR] {e}. Falling back.")
 
     # 2. Gemini API (selected or fallback if Groq failed)
-    if (active_provider == "gemini" or (active_provider == "groq" and not groq_key)) and gemini_key:
+    if (active_provider == "gemini" or (active_provider == "groq" and (not groq_key or True))) and gemini_key:
         try:
             return await _call_gemini(
                 text, resolved_path, user_context_prompt, gemini_key, start_time,
@@ -534,10 +548,12 @@ async def _call_groq(
     start_time: float,
     history_messages: Optional[List[Dict[str, Any]]] = None,
     text_model: Optional[str] = None,
-    vision_model: Optional[str] = None
+    vision_model: Optional[str] = None,
+    has_gemini_fallback: bool = False
 ) -> Dict[str, Any]:
     from groq import Groq
-    client = Groq(api_key=api_key)
+    # max_retries=0 prevents 37s sleeps on 429 rate limits so Gemini/text fallback executes immediately
+    client = Groq(api_key=api_key, timeout=25.0, max_retries=0)
 
     # Multimodal vision path if image attached
     if image_path and os.path.exists(image_path):
@@ -562,7 +578,9 @@ async def _call_groq(
             elapsed = int((time.time() - start_time) * 1000)
             return _normalize_ai_response(parsed, elapsed, f"Groq ({v_model} Vision)", raw_text=text, history_messages=history_messages)
         except Exception as err:
-            print(f"[GROQ VISION API ERROR] {err}. Proceeding with text context.")
+            print(f"[GROQ VISION API ERROR] {err}.")
+            if has_gemini_fallback:
+                raise  # Prefer Gemini Vision with the image over dropping the image to text-only Groq!
 
     # Text Groq candidate models (only active Groq models)
     model_candidates = [
@@ -709,6 +727,7 @@ def _normalize_ai_response(
 
     # Mathematical direction verification (immutable trading law) for trades
     if intent == "NEW_TRADE":
+        sl_verified = False
         if sl:
             try:
                 sl_f = float(sl)
@@ -716,8 +735,10 @@ def _normalize_ai_response(
                 if ref_f is not None and ref_f > 0:
                     if sl_f > ref_f:
                         action = "SELL"
+                        sl_verified = True
                     elif sl_f < ref_f:
                         action = "BUY"
+                        sl_verified = True
             except Exception:
                 pass
 
@@ -726,10 +747,15 @@ def _normalize_ai_response(
                 ent_f = float(entry_price)
                 tp_f = float(tp_levels[0])
                 if ent_f > 0 and tp_f > 0:
-                    if tp_f < ent_f and action == "BUY":
-                        action = "SELL"
-                    elif tp_f > ent_f and action == "SELL":
-                        action = "BUY"
+                    if sl_verified:
+                        # SL+Entry already proved direction; drop contradicting TP rather than inverting direction
+                        if (action == "BUY" and tp_f <= ent_f) or (action == "SELL" and tp_f >= ent_f):
+                            tp_levels = []
+                    else:
+                        if tp_f < ent_f and action == "BUY":
+                            action = "SELL"
+                        elif tp_f > ent_f and action == "SELL":
+                            action = "BUY"
             except Exception:
                 pass
 

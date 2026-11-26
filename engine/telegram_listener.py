@@ -1,9 +1,10 @@
 import asyncio
+import collections
 import os
 import re
 import uuid
-from datetime import datetime
-from typing import Optional, Callable, Any
+from datetime import datetime, timezone
+from typing import Optional, Callable, Any, Dict, List, Tuple
 from config import settings
 from database import (
     save_message,
@@ -22,10 +23,37 @@ class TelegramListenerManager:
         self.bot_app = None
         self.client = None
         self._task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None
         self.broadcast_callback: Optional[Callable] = None
         # Coalescing buffer to merge rapid text + photo messages sent at approx same time
         self._pending_buffers: dict = {}
         self._buffer_lock = asyncio.Lock()
+        # Deduplication & per-channel chronological ordering for push + poll paths
+        self._seen_msg_keys: collections.OrderedDict = collections.OrderedDict()
+        self._channel_last_msg_id: Dict[str, int] = {}
+        self._channel_locks: Dict[str, asyncio.Lock] = {}
+        self._monitored_channels: List[Tuple[str, str, Any]] = []
+
+    def _mark_msg_seen(self, chat_id: str, msg_id: Optional[int]) -> bool:
+        """Returns True if this (chat_id, msg_id) is new and marks it seen; False if already seen."""
+        if msg_id is None:
+            return True
+        key = (str(chat_id), int(msg_id))
+        if key in self._seen_msg_keys:
+            return False
+        self._seen_msg_keys[key] = True
+        while len(self._seen_msg_keys) > 5000:
+            self._seen_msg_keys.popitem(last=False)
+        cur_last = self._channel_last_msg_id.get(str(chat_id), 0)
+        if int(msg_id) > cur_last:
+            self._channel_last_msg_id[str(chat_id)] = int(msg_id)
+        return True
+
+    def _get_channel_lock(self, chat_id: str) -> asyncio.Lock:
+        cid = str(chat_id)
+        if cid not in self._channel_locks:
+            self._channel_locks[cid] = asyncio.Lock()
+        return self._channel_locks[cid]
 
     def register_broadcast_callback(self, cb: Callable):
         self.broadcast_callback = cb
@@ -37,6 +65,24 @@ class TelegramListenerManager:
             except Exception as e:
                 print(f"[WS BROADCAST ERROR] {e}")
 
+    @staticmethod
+    def _has_trade_params(text: str) -> bool:
+        if not text:
+            return False
+        return bool(re.search(
+            r'(?:entry|sl\b|stop\s*loss|tp\b|target|\d+(?:\.\d+)?\s*[-–/]\s*\d+|\b\d{3,6}(?:\.\d+)?\b|\b\d\.\d{3,5}\b)',
+            text,
+            re.IGNORECASE
+        ))
+
+    @staticmethod
+    def _is_promo_or_chatter_only(text: str) -> bool:
+        if not text:
+            return False
+        up = text.upper()
+        promo_markers = ("FUNDEDNOW", "FUNDED NOW", "COUPAN", "COUPON", "YOUTUBE.COM", "YOUTU.BE", "LIVE ON YOUTUBE")
+        return any(m in up for m in promo_markers) and not bool(re.search(r'(?:ENTRY|SL\b|TP\b)', up))
+
     async def queue_incoming_telegram_message(
         self,
         channel_id: str,
@@ -45,14 +91,50 @@ class TelegramListenerManager:
         text: str,
         media_type: str = "text",
         media_path: Optional[str] = None,
-        source: str = "telegram_userbot"
+        source: str = "telegram_userbot",
+        tg_msg_id: Optional[int] = None,
+        tg_date: Optional[datetime] = None,
+        reply_to_msg_id: Optional[int] = None
     ):
         """
-        Coalesces rapid successive messages (e.g. text sent at 11:02:48 followed by photo at 11:02:51)
-        into a single unified message so that Vision AI processes the chart image together with the text.
+        Coalesces rapid successive messages (e.g. text sent at 13:00:22 followed by params at 13:00:52)
+        into a single unified message while NEVER merging distinct messages separated by >90s,
+        unrelated replies, promotional ads, or two separate photos.
         """
+        flush_first = None
+
         async with self._buffer_lock:
             existing = self._pending_buffers.get(channel_id)
+
+            if existing:
+                # Check if incoming message belongs to a DIFFERENT message/time window
+                should_separate = False
+                ex_date = existing.get("tg_date")
+                if ex_date and tg_date:
+                    try:
+                        if abs((tg_date - ex_date).total_seconds()) > 90:
+                            should_separate = True
+                    except Exception:
+                        pass
+
+                ex_ids = existing.get("tg_msg_ids") or []
+                if reply_to_msg_id and ex_ids and reply_to_msg_id not in ex_ids:
+                    should_separate = True
+
+                # Do not merge a promo/ad with a trade setup or vice versa
+                if self._is_promo_or_chatter_only(text) != self._is_promo_or_chatter_only(existing.get("text") or ""):
+                    if (text or "").strip() and (existing.get("text") or "").strip():
+                        should_separate = True
+
+                # Never silently overwrite or discard a second photo
+                if existing.get("media_path") and media_path:
+                    should_separate = True
+
+                if should_separate:
+                    if existing.get("timer_task") and not existing["timer_task"].done():
+                        existing["timer_task"].cancel()
+                    flush_first = self._pending_buffers.pop(channel_id)
+                    existing = None
 
             if existing:
                 # Cancel the existing delayed flush timer
@@ -63,24 +145,24 @@ class TelegramListenerManager:
                 current_text = existing.get("text") or ""
                 new_text = (text or "").strip()
                 if new_text:
-                    if current_text:
-                        merged_text = f"{current_text}\n{new_text}".strip()
-                    else:
-                        merged_text = new_text
+                    merged_text = f"{current_text}\n{new_text}".strip() if current_text else new_text
                 else:
                     merged_text = current_text
 
-                # Merge media
+                # Merge media (at most one has media here)
                 merged_media_path = existing.get("media_path") or media_path
                 merged_media_type = existing.get("media_type") if existing.get("media_path") else media_type
+                if tg_msg_id is not None:
+                    existing.setdefault("tg_msg_ids", []).append(tg_msg_id)
+                if tg_date:
+                    existing["tg_date"] = tg_date
 
-                # Check if text contains trade parameters (SL, Entry, or numbers)
-                has_numbers = bool(re.search(r'\d+', merged_text))
+                has_params = self._has_trade_params(merged_text)
                 is_active_lead = any(k in merged_text.upper() for k in ["ACTIVE TRADE", "ACTIVE SELLING", "ACTIVE NOW", "ACTIVE"])
 
                 # If we have both text and photo, but text is just "Active trade" without numbers yet,
                 # give a brief 3.5s window for parameter text (e.g. Entry-XXXX Sl-XXXX) to arrive
-                if merged_text and merged_media_path and is_active_lead and not has_numbers:
+                if merged_text and merged_media_path and is_active_lead and not has_params:
                     existing["text"] = merged_text
                     existing["media_path"] = merged_media_path
                     existing["media_type"] = merged_media_type
@@ -92,7 +174,6 @@ class TelegramListenerManager:
                 # If we have both text and photo (or parameters arrived):
                 if merged_text and merged_media_path:
                     del self._pending_buffers[channel_id]
-                    # Immediately process the coalesced unified message
                     asyncio.create_task(self.process_incoming_message(
                         channel_id=channel_id,
                         channel_title=channel_title or existing.get("channel_title"),
@@ -113,13 +194,24 @@ class TelegramListenerManager:
                 )
                 return
 
-            # If no existing pending message in buffer:
-            # If the message ALREADY has both meaningful text with numbers and photo
-            has_numbers = bool(re.search(r'\d+', text or ""))
+        # Flush separated previous message outside buffer lock in strict chronological order
+        if flush_first:
+            await self.process_incoming_message(
+                channel_id=flush_first["channel_id"],
+                channel_title=flush_first["channel_title"],
+                sender=flush_first["sender"],
+                text=flush_first["text"],
+                media_type=flush_first["media_type"],
+                media_path=flush_first["media_path"],
+                source=flush_first["source"]
+            )
+
+        async with self._buffer_lock:
+            # If the message ALREADY has both meaningful text with parameters and photo
+            has_params = self._has_trade_params(text or "")
             is_active_lead = any(k in (text or "").upper() for k in ["ACTIVE TRADE", "ACTIVE SELLING", "ACTIVE NOW", "ACTIVE"])
 
-            if (text and text.strip()) and media_path and (has_numbers or not is_active_lead):
-                # Already complete with parameters! Process directly
+            if (text and text.strip()) and media_path and (has_params or not is_active_lead):
                 asyncio.create_task(self.process_incoming_message(
                     channel_id=channel_id,
                     channel_title=channel_title,
@@ -131,7 +223,6 @@ class TelegramListenerManager:
                 ))
                 return
 
-            # Put in buffer and wait up to 3.0 seconds for a companion text/photo to arrive
             buf_item = {
                 "channel_id": channel_id,
                 "channel_title": channel_title,
@@ -139,7 +230,9 @@ class TelegramListenerManager:
                 "text": text or "",
                 "media_type": media_type,
                 "media_path": media_path,
-                "source": source
+                "source": source,
+                "tg_msg_ids": [tg_msg_id] if tg_msg_id is not None else [],
+                "tg_date": tg_date
             }
             buf_item["timer_task"] = asyncio.create_task(
                 self._flush_buffer_after_delay(channel_id, delay=3.0)
@@ -310,7 +403,7 @@ class TelegramListenerManager:
                 "reasoning": interpretation.get("reasoning", ""),
                 "processing_time_ms": interpretation.get("processing_time_ms", 0),
                 "model_used": interpretation.get("model_used", "AI"),
-                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             }
         }
 
@@ -319,7 +412,7 @@ class TelegramListenerManager:
 
         # Log intent decision
         intent_type = interpretation.get("intent")
-        if intent_type == "CHATTER":
+        if intent_type in ("CHATTER", "OTHERS"):
             await log_event("INFO", "FILTER", f"Chatter/noise filtered: '{text[:40]}...'", details=interpretation.get("reasoning"))
         else:
             await log_event("SIGNAL", "SIGNAL", f"Signal identified: {interpretation.get('action')} {interpretation.get('symbol')} at {interpretation.get('entry_price')}", details=str(interpretation))
@@ -451,45 +544,112 @@ class TelegramListenerManager:
         chat_filter = matched_entities if matched_entities else None
         active_title = ", ".join(matched_titles) if matched_titles else (target_channel or "All Joined Chats")
 
+        async def _dispatch_tg_message(msg, chat_id_str: str, chat_title_str: str, sender_str: str):
+            lock = self._get_channel_lock(chat_id_str)
+            async with lock:
+                if not self._mark_msg_seen(chat_id_str, getattr(msg, "id", None)):
+                    return
+
+                text = msg.text or ""
+                media_type = "text"
+                media_path = None
+
+                is_image_doc = (
+                    isinstance(msg.media, MessageMediaDocument)
+                    and getattr(msg.media.document, "mime_type", "").startswith("image/")
+                )
+                if msg.media and (isinstance(msg.media, MessageMediaPhoto) or is_image_doc):
+                    media_type = "photo"
+                    filename = f"live_{uuid.uuid4().hex[:8]}.jpg"
+                    dest_path = settings.UPLOADS_DIR / filename
+                    await client.download_media(msg, file=str(dest_path))
+                    media_path = f"uploads/{filename}"
+
+                reply_id = msg.reply_to_msg_id if getattr(msg, "reply_to", None) else None
+                await self.queue_incoming_telegram_message(
+                    channel_id=chat_id_str,
+                    channel_title=chat_title_str,
+                    sender=sender_str,
+                    text=text,
+                    media_type=media_type,
+                    media_path=media_path,
+                    source="telegram_userbot",
+                    tg_msg_id=getattr(msg, "id", None),
+                    tg_date=getattr(msg, "date", None),
+                    reply_to_msg_id=reply_id
+                )
+
         @client.on(events.NewMessage(chats=chat_filter))
         async def on_new_msg(event):
             msg = event.message
             chat = await event.get_chat()
             chat_title = getattr(chat, "title", "Test Channel") or "Test Channel"
             sender = await event.get_sender()
-            sender_name = getattr(sender, "first_name", "You") or "Tester"
+            sender_name = getattr(sender, "first_name", None) or getattr(chat, "title", None) or "Channel Owner"
+            await _dispatch_tg_message(msg, str(chat.id), chat_title, sender_name)
 
-            text = msg.text or ""
-            media_type = "text"
-            media_path = None
+        # Register updates state with Telegram and seed latest message IDs for real-time fallback polling
+        try:
+            from telethon.tl import functions as tl_functions
+            await client(tl_functions.updates.GetStateRequest())
+        except Exception:
+            pass
 
-            is_image_doc = (
-                isinstance(msg.media, MessageMediaDocument)
-                and getattr(msg.media.document, "mime_type", "").startswith("image/")
-            )
-            if msg.media and (isinstance(msg.media, MessageMediaPhoto) or is_image_doc):
-                media_type = "photo"
-                filename = f"live_{uuid.uuid4().hex[:8]}.jpg"
-                dest_path = settings.UPLOADS_DIR / filename
-                await client.download_media(msg, file=str(dest_path))
-                media_path = f"uploads/{filename}"
+        self._monitored_channels = []
+        for ent in matched_entities:
+            cid = str(getattr(ent, "id", ""))
+            ctitle = getattr(ent, "title", None) or cid
+            self._monitored_channels.append((cid, ctitle, ent))
+            try:
+                latest = await client.get_messages(ent, limit=1)
+                if latest:
+                    self._channel_last_msg_id[cid] = int(latest[0].id)
+            except Exception:
+                pass
 
-            await self.queue_incoming_telegram_message(
-                channel_id=str(chat.id),
-                channel_title=chat_title,
-                sender=sender_name,
-                text=text,
-                media_type=media_type,
-                media_path=media_path,
-                source="telegram_userbot"
-            )
+        async def _poll_monitored_channels():
+            """
+            Polls monitored channels every 3 seconds so broadcast channels whose MTProto push updates
+            are throttled/delayed up to 15 minutes by Telegram servers are captured in near real-time (<3s).
+            """
+            from telethon.errors import FloodWaitError
+            while self.is_running and self.client == client:
+                try:
+                    await asyncio.sleep(3.0)
+                    if not client.is_connected():
+                        continue
+                    for cid, ctitle, ent in list(self._monitored_channels):
+                        last_id = self._channel_last_msg_id.get(cid, 0)
+                        try:
+                            if last_id <= 0:
+                                seed = await client.get_messages(ent, limit=1)
+                                if seed:
+                                    self._channel_last_msg_id[cid] = int(seed[0].id)
+                                continue
+                            new_msgs = await client.get_messages(ent, min_id=last_id, limit=20)
+                            if new_msgs:
+                                # Process in strict chronological ascending ID order
+                                for m in reversed(list(new_msgs)):
+                                    sender_label = getattr(m, "post_author", None) or ctitle
+                                    await _dispatch_tg_message(m, cid, ctitle, sender_label)
+                        except FloodWaitError as fw:
+                            await asyncio.sleep(min(fw.seconds + 1, 60))
+                        except Exception as pe:
+                            print(f"[TG CHANNEL POLL WARNING] {ctitle}: {pe}")
+                except asyncio.CancelledError:
+                    break
+                except Exception as ex:
+                    print(f"[TG POLL LOOP ERROR] {ex}")
+                    await asyncio.sleep(5.0)
 
         self.client = client
         self.is_running = True
         self.active_mode = "userbot"
         settings.LISTENER_RUNNING = True
         settings.LISTENER_TYPE = "userbot"
-        await log_event("INFO", "TELEGRAM", f"Telethon Live Listener started for: '{active_title}'.")
+        if self._monitored_channels:
+            self._poll_task = asyncio.create_task(_poll_monitored_channels())
+        await log_event("INFO", "TELEGRAM", f"Telethon Live Listener started for: '{active_title}' (Real-time push + 3s channel sync).")
 
     async def start_bot_listener(self, token: str, channel_id: Optional[str] = None):
         """Starts telegram bot polling in the background."""
@@ -546,6 +706,10 @@ class TelegramListenerManager:
 
     async def stop_listener(self):
         """Stops active bot or userbot listener."""
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            self._poll_task = None
+
         await self.flush_all_buffers()
 
         if self.bot_app:

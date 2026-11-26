@@ -249,6 +249,11 @@ async def lifespan(app: FastAPI):
                 elif listener_manager.client and not listener_manager.client.is_connected():
                     print("[WATCHDOG] Telethon socket disconnected. Reconnecting MTProto...")
                     await listener_manager.client.connect()
+                    try:
+                        from telethon.tl import functions as tl_functions
+                        await listener_manager.client(tl_functions.updates.GetStateRequest())
+                    except Exception:
+                        pass
             except asyncio.CancelledError:
                 break
             except Exception as ex:

@@ -2,7 +2,7 @@ import os
 import re
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple, List
 from database import log_event, get_db, update_trade_outcome
 
@@ -27,6 +27,7 @@ class XMExecutionEngine:
         self.GOLD_LOTS = 0.02       # Gold: ALWAYS 0.02 lots (exit 0.01 at 1:1)
         self.BTC_LOTS = 0.04        # Bitcoin: ALWAYS 0.04 lots (exit 0.02 at 1:1)
         self.MAX_RISK_USD = 15.0    # Other assets: Max $15 USD risk at Stop Loss
+        self._managed_1to1_tickets: set = set()
         # Cutoff timestamp so historical closed DB rows before deployment remain untouched
         self._sync_cutoff_utc = "2026-11-25 19:25:00"
 
@@ -327,7 +328,7 @@ class XMExecutionEngine:
                         "profit": round(p.profit, 2),
                         "magic": p.magic,
                         "comment": p.comment,
-                        "time": datetime.fromtimestamp(p.time).strftime("%H:%M:%S") if hasattr(p, 'time') else ""
+                        "time": datetime.fromtimestamp(p.time, tz=timezone.utc).strftime("%H:%M:%S") if hasattr(p, 'time') else ""
                     })
                 return out
             try:
@@ -437,6 +438,13 @@ class XMExecutionEngine:
                 "ticket": None
             }
 
+        # Preserve owner's stated entry price before any CMP/live-tick fallback
+        raw_owner_entry = trade_data.get("owner_entry")
+        try:
+            owner_entry_val = float(raw_owner_entry) if raw_owner_entry and float(raw_owner_entry) > 0 else entry
+        except Exception:
+            owner_entry_val = entry
+
         # If entry was omitted, retrieve live tick from MT5 or estimate from SL
         if entry is None or entry <= 0:
             if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
@@ -532,18 +540,23 @@ class XMExecutionEngine:
                     "type_filling": filling,
                 }
                 res = mt5.order_send(request)
-                return res, price
+                actual_fill = float(getattr(res, "price", 0.0) or 0.0) if res else 0.0
+                return res, (actual_fill if actual_fill > 0 else price)
 
             try:
                 result, price_or_err = await asyncio.wait_for(asyncio.to_thread(_send_mt5), timeout=4.0)
                 if result is not None and getattr(result, "retcode", None) == mt5.TRADE_RETCODE_DONE:
                     ticket = result.order
+                    resolved_owner_entry = float(owner_entry_val) if (owner_entry_val and owner_entry_val > 0) else float(price_or_err)
                     await log_event(
                         "SIGNAL", "XM_EXECUTION",
                         f"SUCCESS: XM MT5 Order #{ticket} FILLED - {action_raw} {lot_size} {xm_symbol} @ {price_or_err}",
-                        details=f"Trade {trade_id} -> SL: {final_sl}, TP: {tp_display}"
+                        details=f"Trade {trade_id} -> Owner Entry: {resolved_owner_entry}, SL: {final_sl}, TP: {tp_display}"
                     )
-                    await self._record_execution(trade_id, ticket, xm_symbol, action_raw, lot_size, price_or_err, final_sl, final_tp, "FILLED")
+                    await self._record_execution(
+                        trade_id, ticket, xm_symbol, action_raw, lot_size, price_or_err, final_sl, final_tp, "FILLED",
+                        owner_entry=resolved_owner_entry
+                    )
                     return {
                         "success": True,
                         "status": "FILLED",
@@ -551,6 +564,7 @@ class XMExecutionEngine:
                         "symbol": xm_symbol,
                         "lots": lot_size,
                         "price": price_or_err,
+                        "owner_entry": resolved_owner_entry,
                         "sl": final_sl,
                         "tp": final_tp,
                         "mode": "LIVE_MT5"
@@ -577,12 +591,16 @@ class XMExecutionEngine:
         # 2. XM DEMO SIMULATION (Runs when MT5 terminal not connected or in sandbox)
         import random
         sim_ticket = random.randint(70000000, 79999999)
+        resolved_owner_entry = float(owner_entry_val) if (owner_entry_val and owner_entry_val > 0) else float(entry)
         await log_event(
             "SIGNAL", "XM_EXECUTION",
             f"[XM DEMO] Order #{sim_ticket} Executed: {action_raw} {lot_size} lots on {xm_symbol} @ {entry}",
-            details=f"SL: {final_sl} | TP: {tp_display} | Rules: Gold={self.GOLD_LOTS}, BTC={self.BTC_LOTS}, Other Max Risk=${self.MAX_RISK_USD}"
+            details=f"Owner Entry: {resolved_owner_entry} | SL: {final_sl} | TP: {tp_display} | Rules: Gold={self.GOLD_LOTS}, BTC={self.BTC_LOTS}, Other Max Risk=${self.MAX_RISK_USD}"
         )
-        await self._record_execution(trade_id, sim_ticket, xm_symbol, action_raw, lot_size, entry, final_sl, final_tp, "DEMO_FILLED")
+        await self._record_execution(
+            trade_id, sim_ticket, xm_symbol, action_raw, lot_size, entry, final_sl, final_tp, "DEMO_FILLED",
+            owner_entry=resolved_owner_entry
+        )
 
         return {
             "success": True,
@@ -591,6 +609,7 @@ class XMExecutionEngine:
             "symbol": xm_symbol,
             "lots": lot_size,
             "price": entry,
+            "owner_entry": resolved_owner_entry,
             "sl": final_sl,
             "tp": final_tp,
             "mode": "XM_DEMO_SANDBOX"
@@ -612,11 +631,9 @@ class XMExecutionEngine:
                     if str(trade_id) in (p.comment or "") or str(p.ticket) == str(trade_id):
                         target_pos = p
                         break
-                if not target_pos:
-                    target_pos = positions[0]
 
             if not target_pos:
-                return False, "No open position found"
+                return False, f"No open position found matching {trade_id}"
 
             p = target_pos
             mod_req = {
@@ -640,12 +657,54 @@ class XMExecutionEngine:
             pass
         return {"success": True, "status": "BREAKEVEN_SET", "new_sl": entry_price}
 
-    async def execute_partial_exit_and_extend_1to2(self, trade_id: str) -> Dict[str, Any]:
+    @staticmethod
+    def _parse_float_safe(val: Any) -> Optional[float]:
+        if val is None:
+            return None
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except Exception:
+            nums = re.findall(r'\d+(?:\.\d+)?', str(val).replace(",", ""))
+            if len(nums) >= 2 and any(sep in str(val) for sep in ["-", "/", "TO", "to"]):
+                return (float(nums[0]) + float(nums[1])) / 2.0
+            return float(nums[0]) if nums and float(nums[0]) > 0 else None
+
+    async def _load_owner_refs_by_ticket(self) -> Dict[int, Dict[str, Any]]:
+        """Loads owner entry & initial SL metadata keyed by xm_ticket for active executed trades."""
+        refs: Dict[int, Dict[str, Any]] = {}
+        try:
+            async with get_db() as conn:
+                cur = await conn.execute("""
+                    SELECT trade_id, xm_ticket, owner_entry, entry_price, initial_sl, sl, managed_1to1
+                    FROM trades
+                    WHERE status = 'EXECUTED' AND is_active = 1 AND xm_ticket IS NOT NULL
+                """)
+                for r in await cur.fetchall():
+                    t_id = int(r["xm_ticket"])
+                    refs[t_id] = {
+                        "trade_id": r["trade_id"],
+                        "owner_entry": self._parse_float_safe(r["owner_entry"]) or self._parse_float_safe(r["entry_price"]),
+                        "initial_sl": self._parse_float_safe(r["initial_sl"]) or self._parse_float_safe(r["sl"]),
+                        "managed_1to1": bool(r["managed_1to1"]),
+                    }
+        except Exception:
+            pass
+        return refs
+
+    async def execute_partial_exit_and_extend_1to2(
+        self,
+        trade_id: str,
+        owner_entry: Optional[float] = None,
+        initial_sl: Optional[float] = None
+    ) -> Dict[str, Any]:
         """
         User Strict Rule:
         "once the trade hits 1:1 then automatically exit out half lots meaning 0.01 lots
         should be exited and the SL should be dragged to the entry price directly and
         the TP should be stretched to 1:2 target. Btw this logic should be applied for all the assets."
+        1:1 and 1:2 levels are calculated from the owner's perspective (owner_entry & initial_sl),
+        not our MT5 execution fill price.
         """
         if not self.is_connected or not MT5_AVAILABLE or self.is_mock_mode:
             await log_event(
@@ -655,6 +714,28 @@ class XMExecutionEngine:
             )
             return {"success": True, "status": "PARTIAL_CLOSED_AND_EXTENDED_DEMO"}
 
+        # Load persisted owner entry & initial SL if not passed directly
+        if owner_entry is None or initial_sl is None:
+            try:
+                async with get_db() as conn:
+                    cur = await conn.execute(
+                        """
+                        SELECT owner_entry, entry_price, initial_sl, sl
+                        FROM trades
+                        WHERE trade_id = ? OR CAST(xm_ticket AS TEXT) = ?
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        (str(trade_id), str(trade_id)),
+                    )
+                    row = await cur.fetchone()
+                    if row:
+                        if owner_entry is None:
+                            owner_entry = self._parse_float_safe(row["owner_entry"]) or self._parse_float_safe(row["entry_price"])
+                        if initial_sl is None:
+                            initial_sl = self._parse_float_safe(row["initial_sl"]) or self._parse_float_safe(row["sl"])
+            except Exception:
+                pass
+
         def _sync_partial_and_modify():
             positions = mt5.positions_get()
             target_pos = None
@@ -663,30 +744,32 @@ class XMExecutionEngine:
                     if str(trade_id) in (p.comment or "") or str(p.ticket) == str(trade_id):
                         target_pos = p
                         break
-                if not target_pos:
-                    target_pos = positions[0]
 
             if not target_pos:
-                return False, f"No open MT5 position found for {trade_id}."
+                return False, f"No open MT5 position found matching {trade_id}."
 
             p = target_pos
             sym_info = mt5.symbol_info(p.symbol)
             raw_digits = getattr(sym_info, 'digits', 2) if sym_info else 2
             digits = int(raw_digits) if raw_digits is not None else 2
+            point = float(getattr(sym_info, 'point', 0.01 if digits <= 2 else 0.00001) or (0.01 if digits <= 2 else 0.00001))
+            stops_lvl = float(getattr(sym_info, 'trade_stops_level', 0) or 0)
+            min_stop_dist = max(stops_lvl * point, point * 10.0)
             vol_min = float(getattr(sym_info, 'volume_min', 0.01) or 0.01) if sym_info else 0.01
 
             total_vol = round(float(p.volume), 2)
             half_vol = round(total_vol / 2.0, 2)
             can_partial_close = (total_vol > vol_min and half_vol >= vol_min and round(total_vol - half_vol, 2) >= vol_min)
 
-            entry = round(float(p.price_open), digits)
-            current_sl = float(p.sl)
-            risk_dist = abs(entry - current_sl) if current_sl > 0 else 10.0
+            fill_entry = round(float(p.price_open), digits)
+            ref_entry = round(float(owner_entry), digits) if (owner_entry and owner_entry > 0) else fill_entry
+            ref_sl = float(initial_sl) if (initial_sl and initial_sl > 0) else float(p.sl)
+            risk_dist = abs(ref_entry - ref_sl) if ref_sl > 0 else 10.0
             if risk_dist <= 0:
                 risk_dist = 10.0
 
             is_buy = (p.type == mt5.ORDER_TYPE_BUY)
-            tp_1to2 = round(entry + (2 * risk_dist), digits) if is_buy else round(entry - (2 * risk_dist), digits)
+            tp_1to2 = round(ref_entry + (2 * risk_dist), digits) if is_buy else round(ref_entry - (2 * risk_dist), digits)
 
             tick = mt5.symbol_info_tick(p.symbol)
             if not tick:
@@ -721,12 +804,37 @@ class XMExecutionEngine:
                 closed_lots = half_vol
                 remaining_lots = round(total_vol - half_vol, 2)
 
-            # Step 2: Modify SL to Break-Even (Entry) and TP to 1:2
-            new_sl = entry
-            if is_buy and new_sl >= tick.bid:
-                new_sl = round(tick.bid - (2.0 if digits <= 2 else 0.0002), digits)
-            elif not is_buy and new_sl <= tick.ask:
-                new_sl = round(tick.ask + (2.0 if digits <= 2 else 0.0002), digits)
+            # Refresh tick after partial close before validating SL/TP stops
+            tick = mt5.symbol_info_tick(p.symbol) or tick
+
+            # Step 2: Move SL to Break-Even (respecting XM stops_level) and extend TP to valid 1:2
+            offset = max(2.0 if digits <= 2 else 0.0002, min_stop_dist * 1.5)
+            if is_buy:
+                max_valid_sl = round(tick.bid - min_stop_dist, digits)
+                if fill_entry <= max_valid_sl:
+                    new_sl = fill_entry
+                elif ref_entry <= max_valid_sl:
+                    new_sl = ref_entry
+                else:
+                    new_sl = round(tick.bid - offset, digits)
+                # Ensure TP is strictly above live ask + min_stop_dist
+                min_valid_tp = round(tick.ask + min_stop_dist, digits)
+                if tp_1to2 <= min_valid_tp:
+                    alt_tp = round(fill_entry + (2 * risk_dist), digits)
+                    tp_1to2 = alt_tp if alt_tp > min_valid_tp else (float(p.tp) if float(p.tp) > min_valid_tp else 0.0)
+            else:
+                min_valid_sl = round(tick.ask + min_stop_dist, digits)
+                if fill_entry >= min_valid_sl:
+                    new_sl = fill_entry
+                elif ref_entry >= min_valid_sl:
+                    new_sl = ref_entry
+                else:
+                    new_sl = round(tick.ask + offset, digits)
+                # Ensure TP is strictly below live bid - min_stop_dist
+                max_valid_tp = round(tick.bid - min_stop_dist, digits)
+                if tp_1to2 >= max_valid_tp:
+                    alt_tp = round(fill_entry - (2 * risk_dist), digits)
+                    tp_1to2 = alt_tp if alt_tp < max_valid_tp else (float(p.tp) if (float(p.tp) > 0 and float(p.tp) < max_valid_tp) else 0.0)
 
             mod_req = {
                 "action": mt5.TRADE_ACTION_SLTP,
@@ -737,14 +845,31 @@ class XMExecutionEngine:
             }
             mod_res = mt5.order_send(mod_req)
             if not mod_res or mod_res.retcode != mt5.TRADE_RETCODE_DONE:
-                mod_err = mod_res.comment if mod_res else "SL/TP modify failed"
-                return False, f"1:1 BE SL/TP modification failed on #{p.ticket}: {mod_err}"
+                # Fallback: keep existing valid TP (or 0.0) so Break-Even SL protection never fails
+                mod_req_sl_only = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "position": p.ticket,
+                    "symbol": p.symbol,
+                    "sl": float(new_sl),
+                    "tp": float(p.tp) if p.tp else 0.0,
+                }
+                mod_res = mt5.order_send(mod_req_sl_only)
+                if not mod_res or mod_res.retcode != mt5.TRADE_RETCODE_DONE:
+                    mod_err = mod_res.comment if mod_res else "SL/TP modify failed"
+                    return False, {
+                        "error": f"1:1 BE SL/TP modification failed on #{p.ticket}: {mod_err}",
+                        "closed_lots": closed_lots,
+                        "ticket": p.ticket
+                    }
+                tp_1to2 = float(p.tp) if p.tp else 0.0
 
             return True, {
                 "ticket": p.ticket,
                 "symbol": p.symbol,
                 "closed_lots": closed_lots,
                 "remaining_lots": remaining_lots,
+                "owner_entry": ref_entry,
+                "initial_sl": ref_sl,
                 "new_sl": new_sl,
                 "new_tp_1to2": tp_1to2,
                 "comment": mod_res.comment if mod_res else "OK"
@@ -756,7 +881,7 @@ class XMExecutionEngine:
                 await log_event(
                     "SIGNAL", "XM_EXECUTION",
                     f"SUCCESS: 1:1 Partial Exit on #{res_data['ticket']} - Exited {res_data['closed_lots']} lots ({res_data['symbol']}). "
-                    f"SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']})",
+                    f"Owner Entry: {res_data['owner_entry']} -> SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']})",
                     details=f"Trade {trade_id} -> Runner position: {res_data['remaining_lots']} lots risk-free to 1:2."
                 )
                 try:
@@ -766,21 +891,38 @@ class XMExecutionEngine:
                         if row:
                             db_tid = row["trade_id"]
                             await conn.execute(
-                                "UPDATE trades SET sl = ?, updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?",
+                                "UPDATE trades SET sl = ?, managed_1to1 = 1, updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?",
                                 (str(res_data["new_sl"]), db_tid)
                             )
                             await conn.execute(
                                 """INSERT INTO trade_events (trade_id, event_type, previous_status, new_status, notes)
                                    VALUES (?, 'PARTIAL_1_TO_1', 'EXECUTED', 'EXECUTED', ?)""",
-                                (db_tid, f"1:1 Target Hit on #{res_data['ticket']}: Exited {res_data['closed_lots']} lots, SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']}).")
+                                (db_tid, f"1:1 Target Hit on #{res_data['ticket']} (Owner Entry {res_data['owner_entry']}): Exited {res_data['closed_lots']} lots, SL moved to Break-Even ({res_data['new_sl']}), TP stretched to 1:2 ({res_data['new_tp_1to2']}).")
                             )
                             await conn.commit()
                 except Exception:
                     pass
                 return {"success": True, "status": "PARTIAL_CLOSED_AND_EXTENDED", "details": res_data}
             else:
-                await log_event("WARNING", "XM_EXECUTION", f"1:1 Partial exit notice for {trade_id}: {res_data}")
-                return {"success": False, "message": str(res_data)}
+                if isinstance(res_data, dict) and res_data.get("closed_lots", 0) > 0:
+                    try:
+                        async with get_db() as conn:
+                            cur = await conn.execute("SELECT trade_id FROM trades WHERE xm_ticket = ? LIMIT 1", (int(res_data["ticket"]),))
+                            row = await cur.fetchone()
+                            if row:
+                                db_tid = row["trade_id"]
+                                await conn.execute("UPDATE trades SET managed_1to1 = 1, updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?", (db_tid,))
+                                await conn.execute(
+                                    """INSERT INTO trade_events (trade_id, event_type, previous_status, new_status, notes)
+                                       VALUES (?, 'PARTIAL_1_TO_1', 'EXECUTED', 'EXECUTED', ?)""",
+                                    (db_tid, f"1:1 Partial closed {res_data['closed_lots']} lots on #{res_data['ticket']}; notice: {res_data['error']}")
+                                )
+                                await conn.commit()
+                    except Exception:
+                        pass
+                err_text = res_data.get("error") if isinstance(res_data, dict) else str(res_data)
+                await log_event("WARNING", "XM_EXECUTION", f"1:1 Partial exit notice for {trade_id}: {err_text}")
+                return {"success": False, "message": err_text}
         except Exception as e:
             await log_event("WARNING", "XM_EXECUTION", f"Exception during 1:1 partial exit on {trade_id}: {e}")
             return {"success": False, "error": str(e)}
@@ -877,14 +1019,16 @@ class XMExecutionEngine:
     async def check_and_manage_1to1_positions(self) -> List[Dict[str, Any]]:
         """
         Polls XM MT5 positions (every 5s).
-        Calculates Risk R = |Entry - SL|.
-        If live profit >= 1R:
+        Calculates Risk R = |OwnerEntry - InitialSL| from the owner's signal perspective.
+        If live price reaches 1:1 from owner's perspective (gain >= R):
           * Automatically closes 50% lots.
-          * Drags Stop Loss directly to Entry Price (Cost-to-Cost / Break-Even).
-          * Extends runner TP to 1:2.
+          * Drags Stop Loss to Break-Even.
+          * Extends runner TP to owner's 1:2.
         """
         if not self.is_connected or not MT5_AVAILABLE or self.is_mock_mode:
             return []
+
+        trade_refs = await self._load_owner_refs_by_ticket()
 
         def _sync_evaluate_1to1():
             actions_to_take = []
@@ -897,8 +1041,13 @@ class XMExecutionEngine:
                 if ticket in self._managed_1to1_tickets:
                     continue  # Already managed 1:1
 
-                entry = float(p.price_open)
-                sl = float(p.sl)
+                ref = trade_refs.get(ticket)
+                if ref and ref.get("managed_1to1"):
+                    self._managed_1to1_tickets.add(ticket)
+                    continue
+
+                entry = ref["owner_entry"] if (ref and ref.get("owner_entry")) else float(p.price_open)
+                sl = ref["initial_sl"] if (ref and ref.get("initial_sl")) else float(p.sl)
                 if sl <= 0 or entry <= 0:
                     continue
 
@@ -914,7 +1063,7 @@ class XMExecutionEngine:
                 current_price = tick.bid if is_buy else tick.ask
                 gain = (current_price - entry) if is_buy else (entry - current_price)
 
-                # Check if current profit >= 1:1 Risk
+                # Check if live market price hit 1:1 Risk from owner's perspective
                 if gain >= risk:
                     actions_to_take.append({
                         "ticket": ticket,
@@ -934,7 +1083,11 @@ class XMExecutionEngine:
             for c in candidates:
                 ticket = c["ticket"]
                 self._managed_1to1_tickets.add(ticket)
-                res = await self.execute_partial_exit_and_extend_1to2(str(ticket))
+                res = await self.execute_partial_exit_and_extend_1to2(
+                    str(ticket),
+                    owner_entry=c["entry"],
+                    initial_sl=c["sl"]
+                )
                 if res.get("success"):
                     results.append({"ticket": ticket, **res})
             return results
@@ -985,7 +1138,7 @@ class XMExecutionEngine:
                 if not deals:
                     continue
 
-                out_deals = [d for d in deals if getattr(d, "entry", None) == 1]
+                out_deals = [d for d in deals if getattr(d, "entry", None) in (1, 3)]
                 if not out_deals:
                     continue
 
@@ -1045,7 +1198,8 @@ class XMExecutionEngine:
         entry_price: float,
         sl: float,
         tp: float,
-        status: str
+        status: str,
+        owner_entry: Optional[float] = None
     ):
         """Records execution into database audit trail."""
         try:
@@ -1070,7 +1224,8 @@ class XMExecutionEngine:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (trade_id, ticket, symbol, order_type, lots, entry_price, sl, tp, status))
 
-                # Update trades master table with XM Execution receipt
+                # Update trades master table with XM Execution receipt while preserving owner_entry & initial_sl
+                owner_val = float(owner_entry) if (owner_entry and owner_entry > 0) else float(entry_price)
                 await conn.execute("""
                     UPDATE trades 
                     SET status = 'EXECUTED',
@@ -1079,11 +1234,13 @@ class XMExecutionEngine:
                         xm_ticket = ?,
                         xm_execution_price = ?,
                         xm_lots = ?,
+                        owner_entry = COALESCE(owner_entry, ?),
+                        initial_sl = COALESCE(initial_sl, ?),
                         xm_response = ?,
                         pnl_notes = 'XM Ticket #' || ? || ' (' || ? || ' lots) FILLED @ ' || ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE trade_id = ?
-                """, (ticket, entry_price, lots, f"XM Ticket #{ticket} ({lots} lots) FILLED @ {entry_price} | SL: {sl} | TP: {tp}", ticket, lots, entry_price, trade_id))
+                """, (ticket, entry_price, lots, owner_val, float(sl), f"XM Ticket #{ticket} ({lots} lots) FILLED @ {entry_price} | SL: {sl} | TP: {tp}", ticket, lots, entry_price, trade_id))
 
                 await conn.commit()
         except Exception as e:

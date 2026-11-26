@@ -569,6 +569,29 @@ function getOutcomeBadgeClass(status) {
   return map[status] || 'badge-pending';
 }
 
+function parseUtcDate(ts) {
+  if (!ts) return null;
+  if (ts instanceof Date) return ts;
+  let s = String(ts).trim();
+  // Normalize SQLite "YYYY-MM-DD HH:MM:SS" or ISO strings lacking timezone offset as UTC
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) {
+    s = s.replace(" ", "T") + "Z";
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) {
+    s = s + "Z";
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatLocalTime(ts, withSeconds = true) {
+  const d = parseUtcDate(ts);
+  if (!d) return "";
+  const opts = withSeconds
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' };
+  return d.toLocaleTimeString([], opts);
+}
+
 function createSignalCardHtml(msg) {
   const intent = msg.intent || "CHATTER";
   const action = msg.action || "NONE";
@@ -595,7 +618,7 @@ function createSignalCardHtml(msg) {
     badgeIcon = "refresh-cw";
   }
 
-  const timeFormatted = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now';
+  const timeFormatted = msg.created_at ? (formatLocalTime(msg.created_at, true) || 'Just now') : 'Just now';
   const confidence = msg.confidence || 0;
 
   // Format TP levels
@@ -996,7 +1019,7 @@ async function loadTrades() {
 function setTradeFilter(filter, btn) {
   currentTradeFilter = filter;
   if (btn && btn.parentElement) {
-    btn.parentElement.querySelectorAll(".chip-btn").forEach(el => el.classList.remove("active"));
+    btn.parentElement.querySelectorAll(".filter-btn, .chip-btn").forEach(el => el.classList.remove("active"));
     btn.classList.add("active");
   }
   loadTrades();
@@ -1061,8 +1084,8 @@ function renderTrades(trades) {
               <span class="source-pill">${t.order_type || 'MARKET'}</span>
             </div>
             <div class="trade-start-meta">
-              Started: ${t.created_at ? new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today'}
-              ${t.updated_at && t.updated_at !== t.created_at ? `&bull; Updated: ${new Date(t.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+              Started: ${t.created_at ? (formatLocalTime(t.created_at, false) || 'Today') : 'Today'}
+              ${t.updated_at && t.updated_at !== t.created_at ? `&bull; Updated: ${formatLocalTime(t.updated_at, false)}` : ''}
             </div>
           </div>
           <div class="trade-outcome-wrap">
@@ -1188,7 +1211,7 @@ async function toggleTimeline(tradeId) {
                 ${escapeHtml(ev.new_status)}
               </span>
               <span class="timeline-step-time">
-                ${ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : ''}
+                ${ev.created_at ? formatLocalTime(ev.created_at, true) : ''}
               </span>
             </div>
             <div class="timeline-step-note">
@@ -1421,7 +1444,7 @@ async function loadLogs() {
 
     terminal.innerHTML = (data.logs || []).reverse().map(l => `
       <div class="log-entry">
-        <span class="log-time">[${new Date(l.created_at).toLocaleTimeString()}]</span>
+        <span class="log-time">[${formatLocalTime(l.created_at, true)}]</span>
         <span class="log-level-${l.level}">[${l.level}]</span>
         <span class="log-msg">${escapeHtml(l.message)}</span>
       </div>
@@ -2601,7 +2624,7 @@ function updateRecentDashboardWidgets(msgs) {
         </div>
         <div style="font-size: 0.76rem; color: var(--text-secondary); display: flex; justify-content: space-between; font-family: var(--font-mono);">
           <span>Entry: <strong>${s.entry_price || 'CMP'}</strong> &bull; SL: <span style="color:var(--danger-text);">${s.sl || 'Open'}</span></span>
-          <span style="color: var(--text-dim);">${s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}</span>
+          <span style="color: var(--text-dim);">${s.created_at ? (formatLocalTime(s.created_at, false) || 'Now') : 'Now'}</span>
         </div>
       </div>
     `;
@@ -2748,7 +2771,7 @@ function renderTradeSignals(msgs) {
                 <td><span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--info-text);">${s.processing_time_ms || 210}ms</span></td>
                 <td>
                   <div style="font-size: 0.72rem; color: var(--text-dim);">
-                    ${escapeHtml(s.channel_title || "Telegram")} &bull; ${s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
+                    ${escapeHtml(s.channel_title || "Telegram")} &bull; ${s.created_at ? (formatLocalTime(s.created_at, false) || 'Now') : 'Now'}
                   </div>
                 </td>
                 <td>

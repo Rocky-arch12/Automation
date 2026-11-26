@@ -198,6 +198,9 @@ async def init_db():
             ("xm_lots", "REAL"),
             ("channel_id", "TEXT"),
             ("channel_title", "TEXT"),
+            ("owner_entry", "REAL"),
+            ("initial_sl", "REAL"),
+            ("managed_1to1", "INTEGER DEFAULT 0"),
         ]:
             try:
                 await conn.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
@@ -212,7 +215,10 @@ async def init_db():
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol_active ON trades(symbol, is_active)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trade_events_tid ON trade_events(trade_id)")
-        
+
+        # Data hygiene: ensure FAILED_EXECUTION rows never stay flagged as active
+        await conn.execute("UPDATE trades SET is_active = 0 WHERE status = 'FAILED_EXECUTION' AND is_active = 1")
+
         await conn.commit()
         
     # Seed default settings from environment if not present
@@ -507,7 +513,7 @@ async def create_trade(data: Dict[str, Any]) -> str:
 
     status = data.get("status", "PENDING")
     outcome = data.get("outcome", "Pending Setup (Awaiting Owner Confirmation)")
-    is_active = 0 if status in ["CANCELLED", "SL_HIT", "TP_HIT"] else 1
+    is_active = 0 if status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION"] else 1
     init_msg_id = data.get("initial_message_id")
     channel_id = data.get("channel_id")
     channel_title = data.get("channel_title")
@@ -515,19 +521,23 @@ async def create_trade(data: Dict[str, Any]) -> str:
     xm_execution_price = data.get("xm_execution_price")
     xm_response = data.get("xm_response")
     xm_lots = data.get("xm_lots")
+    owner_entry = data.get("owner_entry")
+    initial_sl = data.get("initial_sl")
 
     async with get_db() as conn:
         await conn.execute("""
             INSERT INTO trades (
                 trade_id, symbol, action, order_type, entry_price, sl, tp_levels,
                 risk_reward, status, outcome, is_active, initial_message_id, last_message_id, pnl_notes,
-                channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots,
+                owner_entry, initial_sl
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_id, symbol, action, order_type, entry_price, sl, tp_str,
             data.get("risk_reward"), status, outcome, is_active, init_msg_id, init_msg_id,
             data.get("pnl_notes", outcome),
-            channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots
+            channel_id, channel_title, xm_ticket, xm_execution_price, xm_response, xm_lots,
+            owner_entry, initial_sl
         ))
 
         # Insert initial trade event
@@ -553,10 +563,13 @@ async def update_trade_outcome(
     xm_ticket: Optional[int] = None,
     xm_execution_price: Optional[float] = None,
     xm_response: Optional[str] = None,
-    xm_lots: Optional[float] = None
+    xm_lots: Optional[float] = None,
+    entry_price: Optional[str] = None,
+    owner_entry: Optional[float] = None,
+    initial_sl: Optional[float] = None
 ):
     """Updates a trade's lifecycle outcome and appends to the trade_events audit trail."""
-    is_terminal = new_status in ["CANCELLED", "SL_HIT", "TP_HIT"]
+    is_terminal = new_status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION"]
     is_active = 0 if is_terminal else 1
 
     async with get_db() as conn:
@@ -576,10 +589,13 @@ async def update_trade_outcome(
             UPDATE trades 
             SET status = ?, outcome = ?, pnl_notes = ?, is_active = ?,
                 last_message_id = COALESCE(?, last_message_id),
+                entry_price = COALESCE(?, entry_price),
+                owner_entry = COALESCE(?, owner_entry),
+                initial_sl = COALESCE(?, initial_sl),
                 sl = ?, xm_ticket = ?, xm_execution_price = COALESCE(?, xm_execution_price),
                 xm_response = COALESCE(?, xm_response), xm_lots = ?, updated_at = CURRENT_TIMESTAMP
             WHERE trade_id = ?
-        """, (new_status, outcome, notes, is_active, message_id, sl_to_save, ticket_to_save, xm_execution_price, xm_response, lots_to_save, trade_id))
+        """, (new_status, outcome, notes, is_active, message_id, entry_price, owner_entry, initial_sl, sl_to_save, ticket_to_save, xm_execution_price, xm_response, lots_to_save, trade_id))
 
         await conn.execute("""
             INSERT INTO trade_events (
@@ -621,9 +637,11 @@ async def get_channel_recent_messages(
             i.entry_price,
             i.sl,
             i.tp_levels,
-            i.reasoning
+            i.reasoning,
+            t.status as trade_status
         FROM messages m
         LEFT JOIN interpretations i ON m.id = i.message_id
+        LEFT JOIN trades t ON m.trade_id = t.trade_id
         WHERE 1=1
     """
     params = []
@@ -660,10 +678,10 @@ async def get_channel_pending_trades(
     channel_id: Optional[str] = None,
     channel_title: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Returns currently pending trade setups in this channel awaiting activation."""
+    """Returns currently pending trade setups in this channel awaiting activation or parameters."""
     query = """
         SELECT * FROM trades 
-        WHERE status = 'PENDING' AND is_active = 1
+        WHERE status IN ('PENDING', 'PENDING_AWAITING_PARAMS') AND is_active = 1
     """
     params = []
     if channel_id and channel_id != "unknown":
@@ -712,19 +730,20 @@ async def get_channel_active_trades(
 
 async def expire_old_pending_trades(max_age_seconds: int = 7200) -> List[str]:
     """
-    Cancels pending trades that have had no update within max_age_seconds (default 2 hours).
-    Returns list of expired trade IDs.
+    Cancels pending trades (both PENDING and PENDING_AWAITING_PARAMS) that have had
+    no update within max_age_seconds (default 2 hours). Returns list of expired trade IDs.
     """
     async with get_db() as conn:
         cursor = await conn.execute("""
-            SELECT trade_id, symbol, created_at FROM trades
-            WHERE status = 'PENDING' AND is_active = 1
+            SELECT trade_id, symbol, status, created_at FROM trades
+            WHERE status IN ('PENDING', 'PENDING_AWAITING_PARAMS') AND is_active = 1
             AND (strftime('%s', 'now') - strftime('%s', created_at)) > ?
         """, (max_age_seconds,))
         rows = await cursor.fetchall()
         expired_ids = []
         for r in rows:
             tid = r["trade_id"]
+            prev_st = r["status"]
             expired_ids.append(tid)
             await conn.execute("""
                 UPDATE trades
@@ -734,8 +753,8 @@ async def expire_old_pending_trades(max_age_seconds: int = 7200) -> List[str]:
             """, (tid,))
             await conn.execute("""
                 INSERT INTO trade_events (trade_id, event_type, previous_status, new_status, notes)
-                VALUES (?, 'EXPIRED', 'PENDING', 'CANCELLED', 'Setup expired: No activation received within 2 hours.')
-            """, (tid,))
+                VALUES (?, 'EXPIRED', ?, 'CANCELLED', 'Setup expired: No activation or parameters received within 2 hours.')
+            """, (tid, prev_st))
         if expired_ids:
             await conn.commit()
         return expired_ids
@@ -826,7 +845,7 @@ async def get_all_trades(status_filter: Optional[str] = None, limit: int = 50) -
     """
     params = []
     if status_filter and status_filter != "ALL":
-        if status_filter == "ACTIVE_ONLY":
+        if status_filter in ("ACTIVE_ONLY", "ACTIVE"):
             query += " AND t.is_active = 1"
         elif status_filter == "CLOSED_ONLY":
             query += " AND t.is_active = 0"

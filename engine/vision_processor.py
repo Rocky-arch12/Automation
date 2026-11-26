@@ -7,26 +7,31 @@ from PIL import Image
 import cv2
 import numpy as np
 
-def process_and_encode_image(image_path: str, max_dimension: int = 1280) -> Tuple[str, str]:
+def process_and_encode_image(image_path: str, max_dimension: int = 1920) -> Tuple[str, str]:
     """
-    Loads, optimizes, and encodes an image to base64 for Groq multimodal vision model (qwen/qwen3.8-27b).
+    Loads, optimizes, and encodes an image to base64 for multimodal vision models.
+    Avoids unnecessary recompression on already-compact JPEGs so small chart digits remain sharp.
     """
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found at {image_path}")
 
     with Image.open(path) as img:
+        w, h = img.size
+        if img.format == "JPEG" and img.mode == "RGB" and max(w, h) <= max_dimension:
+            with open(path, "rb") as raw_f:
+                return "image/jpeg", base64.b64encode(raw_f.read()).decode("utf-8")
+
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
 
-        w, h = img.size
         if max(w, h) > max_dimension:
             scale = max_dimension / max(w, h)
             new_w, new_h = int(w * scale), int(h * scale)
             img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85, optimize=True)
+        img.save(buffer, format="JPEG", quality=94, optimize=True)
         encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
         return "image/jpeg", encoded
 

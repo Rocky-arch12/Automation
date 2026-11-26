@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from database import (
     create_trade,
@@ -134,6 +134,18 @@ def parse_price(val: Any) -> float:
     numbers = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', str(val).replace(",", ""))]
     return numbers[0] if numbers else 0.0
 
+def _parse_utc_timestamp(ts_val: Any) -> Optional[float]:
+    """Parses a SQLite/ISO UTC timestamp safely into an epoch timestamp without local-TZ skew."""
+    if not ts_val:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_val).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
 async def find_duplicate_trade(
     symbol: str,
     action: str,
@@ -157,17 +169,12 @@ async def find_duplicate_trade(
             """, (symbol, action))
             rows = [dict(r) for r in await cursor.fetchall()]
 
-        now_ts = datetime.utcnow().timestamp()
+        now_ts = datetime.now(timezone.utc).timestamp()
         for row in rows:
-            created_str = row.get("created_at")
-            if not created_str:
+            trade_ts = _parse_utc_timestamp(row.get("created_at"))
+            if trade_ts is None:
                 continue
-
-            try:
-                trade_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
-                age_seconds = now_ts - trade_dt.timestamp()
-            except Exception:
-                age_seconds = 0
+            age_seconds = now_ts - trade_ts
 
             row_entry = parse_entry_price(row.get("entry_price"))
             row_sl = parse_price(row.get("sl"))
@@ -179,8 +186,8 @@ async def find_duplicate_trade(
                     if abs(sl_float - row_sl) <= 1.0:
                         return row
 
-            # Check 2: Extremely recent message (<= 180s = 3 mins) on the same symbol and action
-            if age_seconds <= max_recent_seconds:
+            # Check 2: Extremely recent non-terminal setup (<= 180s = 3 mins) on the same symbol and action
+            if age_seconds <= max_recent_seconds and status not in ["CANCELLED", "FAILED_EXECUTION", "SL_HIT", "TP_HIT"]:
                 if entry_float > 0 and row_entry > 0:
                     diff_ratio = abs(entry_float - row_entry) / row_entry
                     if diff_ratio <= 0.0035:
@@ -273,6 +280,7 @@ async def correlate_and_process_trade(
                 "symbol": sym,
                 "action": act,
                 "entry_price": entry_float,
+                "owner_entry": entry_float if entry_float > 0 else None,
                 "sl": final_sl,
                 "tp_levels": [final_tp] if final_tp else []
             })
@@ -280,6 +288,7 @@ async def correlate_and_process_trade(
             ticket = xm_res.get("ticket")
             lots = xm_res.get("lots")
             exec_price = xm_res.get("price") or entry_float
+            owner_entry_val = xm_res.get("owner_entry") or (entry_float if entry_float > 0 else exec_price)
 
             if xm_res.get("success"):
                 await update_trade_outcome(
@@ -292,7 +301,10 @@ async def correlate_and_process_trade(
                     xm_ticket=ticket,
                     xm_execution_price=exec_price,
                     xm_response=json.dumps(xm_res),
-                    xm_lots=lots
+                    xm_lots=lots,
+                    entry_price=str(owner_entry_val) if owner_entry_val else None,
+                    owner_entry=float(owner_entry_val) if owner_entry_val else None,
+                    initial_sl=float(final_sl)
                 )
                 await update_message_trade_id(message_id, target_tid)
                 await log_event(
@@ -386,6 +398,7 @@ async def correlate_and_process_trade(
                     "symbol": symbol,
                     "action": action,
                     "entry_price": entry_float,
+                    "owner_entry": entry_float if entry_float > 0 else None,
                     "sl": final_sl,
                     "tp_levels": [final_tp] if final_tp else []
                 })
@@ -393,6 +406,7 @@ async def correlate_and_process_trade(
                 ticket = xm_res.get("ticket")
                 lots = xm_res.get("lots")
                 exec_price = xm_res.get("price") or entry_float
+                owner_entry_val = xm_res.get("owner_entry") or (entry_float if entry_float > 0 else exec_price)
 
                 if xm_res.get("success"):
                     await create_trade({
@@ -400,7 +414,9 @@ async def correlate_and_process_trade(
                         "symbol": symbol,
                         "action": action,
                         "order_type": order_type,
-                        "entry_price": str(exec_price) if exec_price else "CMP",
+                        "entry_price": str(owner_entry_val) if owner_entry_val else "CMP",
+                        "owner_entry": float(owner_entry_val) if owner_entry_val else None,
+                        "initial_sl": float(final_sl),
                         "sl": str(final_sl),
                         "tp_levels": [str(final_tp)] if final_tp else [],
                         "status": "EXECUTED",
@@ -510,24 +526,61 @@ async def correlate_and_process_trade(
         # and were explicitly awaiting confirmation!
         if update_type == "ACTIVATE" and not target_trade:
             pending_list = await get_channel_pending_trades(channel_id, channel_title)
+            now_utc_ts = datetime.now(timezone.utc).timestamp()
             for pt in pending_list:
-                created_str = pt.get("created_at")
-                if created_str:
-                    try:
-                        trade_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
-                        age = (datetime.utcnow().timestamp() - trade_dt.timestamp())
-                        if age <= 2700: # 45 minutes
-                            target_trade = pt
-                            target_tid = pt["trade_id"]
-                            break
-                    except Exception:
-                        pass
+                trade_ts = _parse_utc_timestamp(pt.get("created_at"))
+                if trade_ts is not None and (now_utc_ts - trade_ts) <= 2700:
+                    target_trade = pt
+                    target_tid = pt["trade_id"]
+                    break
 
         if not target_trade and update_type != "ACTIVATE":
             active_list = await get_channel_active_trades(channel_id, channel_title)
             if active_list:
                 target_trade = active_list[0]
                 target_tid = target_trade["trade_id"]
+
+        # If target_trade is already in a terminal state (CANCELLED, FAILED_EXECUTION, SL_HIT, TP_HIT):
+        if target_trade and target_trade.get("status") in ["CANCELLED", "FAILED_EXECUTION", "SL_HIT", "TP_HIT"]:
+            term_status = target_trade.get("status")
+            if update_type == "ACTIVATE" or (is_active_now and sl_float > 0):
+                # First check if there is a newer pending trade in this channel for the same symbol
+                retargeted = None
+                for pt in await get_channel_pending_trades(channel_id, channel_title):
+                    pt_sym = normalize_symbol(pt.get("symbol"), "")
+                    if pt_sym == symbol or not symbol:
+                        retargeted = pt
+                        break
+                if retargeted:
+                    target_trade = retargeted
+                    target_tid = retargeted["trade_id"]
+                else:
+                    # Treat as a fresh live active trade instead of silently dropping it!
+                    fresh_interp = dict(interpretation)
+                    fresh_interp["intent"] = "NEW_TRADE"
+                    fresh_interp["is_active_now"] = True
+                    fresh_interp["target_trade_id"] = None
+                    return await correlate_and_process_trade(
+                        message_id=message_id,
+                        interpretation=fresh_interp,
+                        raw_text=raw_text,
+                        channel_id=channel_id,
+                        channel_title=channel_title,
+                        has_image=has_image
+                    )
+            else:
+                await update_message_trade_id(message_id, target_tid)
+                async with get_db() as conn:
+                    await conn.execute("""
+                        INSERT INTO trade_events (trade_id, message_id, event_type, previous_status, new_status, notes)
+                        VALUES (?, ?, 'COMMENTARY', ?, ?, ?)
+                    """, (target_tid, message_id, term_status, term_status, f"Post-close update: {raw_text}"))
+                    await conn.commit()
+                return {
+                    "trade_id": target_tid,
+                    "action": "TERMINAL_COMMENTARY",
+                    "message": f"Recorded commentary for already-closed trade {target_tid} ({term_status})."
+                }
 
         # If owner said "ACTIVE" but there is NO eligible recent pending trade:
         # Route to fresh active trade setup!
@@ -575,21 +628,27 @@ async def correlate_and_process_trade(
             await update_message_trade_id(message_id, target_tid)
 
             if update_type == "ACTIVATE":
-                t_symbol = target_trade["symbol"]
+                t_symbol = target_trade["symbol"] or symbol
+                # Prefer fresh parameters from activation message when supplied (e.g. chart attached on activation)
+                t_entry = entry_float if entry_float > 0 else parse_entry_price(target_trade.get("entry_price"))
+                t_sl = sl_float if sl_float > 0 else parse_price(target_trade.get("sl"))
                 t_action = target_trade["action"]
-                t_entry = parse_entry_price(target_trade.get("entry_price")) or entry_float
-                t_sl = parse_price(target_trade.get("sl")) or sl_float
+                if sl_float > 0 and ("BUY" in raw_text.upper() or "SELL" in raw_text.upper() or (t_entry > 0 and t_sl > 0)):
+                    if t_entry > 0 and t_sl > 0:
+                        t_action = "SELL" if t_sl > t_entry else "BUY"
+                    elif interpretation.get("action") in ["BUY", "SELL"]:
+                        t_action = interpretation["action"]
 
                 tp_levels_raw = target_trade.get("tp_levels")
-                if isinstance(tp_levels_raw, str):
+                if tp_levels:
+                    t_tps = tp_levels
+                elif isinstance(tp_levels_raw, str):
                     try: t_tps = json.loads(tp_levels_raw)
                     except Exception: t_tps = [tp_levels_raw]
                 elif isinstance(tp_levels_raw, list):
                     t_tps = tp_levels_raw
                 else:
-                    t_tps = tp_levels
-                if not t_tps and tp_levels:
-                    t_tps = tp_levels
+                    t_tps = []
 
                 is_valid, final_sl, final_tp, val_msg = xm_executor.validate_and_enforce_sl_tp(
                     symbol=t_symbol,
@@ -605,6 +664,7 @@ async def correlate_and_process_trade(
                         "trade_id": target_tid,
                         "symbol": t_symbol,
                         "action": t_action,
+                        "timestamp": time.time(),
                         "created_at": datetime.utcnow().isoformat()
                     }
                     return {"trade_id": target_tid, "action": "AWAITING_SL", "reason": val_msg}
@@ -614,6 +674,7 @@ async def correlate_and_process_trade(
                     "symbol": t_symbol,
                     "action": t_action,
                     "entry_price": t_entry,
+                    "owner_entry": t_entry if t_entry > 0 else None,
                     "sl": final_sl,
                     "tp_levels": [final_tp] if final_tp else []
                 })
@@ -621,6 +682,7 @@ async def correlate_and_process_trade(
                 ticket = xm_res.get("ticket")
                 lots = xm_res.get("lots")
                 exec_price = xm_res.get("price") or t_entry
+                owner_entry_val = xm_res.get("owner_entry") or (t_entry if t_entry > 0 else exec_price)
 
                 if xm_res.get("success"):
                     await update_trade_outcome(
@@ -633,7 +695,10 @@ async def correlate_and_process_trade(
                         xm_ticket=ticket,
                         xm_execution_price=exec_price,
                         xm_response=json.dumps(xm_res),
-                        xm_lots=lots
+                        xm_lots=lots,
+                        entry_price=str(owner_entry_val) if owner_entry_val else None,
+                        owner_entry=float(owner_entry_val) if owner_entry_val else None,
+                        initial_sl=float(final_sl)
                     )
                     await log_event(
                         "SIGNAL", "TRADE_ACTIVATION",

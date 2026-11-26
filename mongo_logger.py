@@ -208,7 +208,7 @@ class MongoLogger:
             async for doc in cursor:
                 created = doc.get("created_at")
                 created_str = (
-                    created.strftime("%Y-%m-%d %H:%M:%S")
+                    created.strftime("%Y-%m-%dT%H:%M:%SZ")
                     if isinstance(created, datetime)
                     else str(doc.get("created_at_iso") or "")
                 )
@@ -320,7 +320,7 @@ class MongoLogger:
             async for doc in cursor:
                 created = doc.get("created_at")
                 created_str = (
-                    created.strftime("%Y-%m-%d %H:%M:%S")
+                    created.strftime("%Y-%m-%dT%H:%M:%SZ")
                     if isinstance(created, datetime)
                     else str(doc.get("created_at_iso") or "")
                 )
