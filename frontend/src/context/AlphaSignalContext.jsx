@@ -40,6 +40,7 @@ export function AlphaSignalProvider({ children }) {
     avg_confidence: 0,
   });
   const [messages, setMessages] = useState([]);
+  const [unfilteredMessages, setUnfilteredMessages] = useState([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [trades, setTrades] = useState([]);
   const [tradesLoaded, setTradesLoaded] = useState(false);
@@ -129,7 +130,11 @@ export function AlphaSignalProvider({ children }) {
       const search = overrideSearch ?? filterRefs.current.messageSearch;
       try {
         const data = await fetchMessages({ limit: 60, intentFilter, search });
-        setMessages(data.messages || []);
+        const list = data.messages || [];
+        setMessages(list);
+        if (intentFilter === 'ALL' && !search) {
+          setUnfilteredMessages(list);
+        }
         setMessagesLoaded(true);
       } catch (e) {
         console.error('Failed to load messages', e);
@@ -214,6 +219,7 @@ export function AlphaSignalProvider({ children }) {
     try {
       await resetAllData();
       setMessages([]);
+      setUnfilteredMessages([]);
       await Promise.all([loadStats(), loadLogs(), loadTrades(), loadXmPositions()]);
       showToast('All message logs, trades, and history wiped clean.', 'info');
     } catch (e) {
@@ -300,6 +306,7 @@ export function AlphaSignalProvider({ children }) {
           if (matchesFilter) {
             setMessages((prev) => [data, ...prev]);
           }
+          setUnfilteredMessages((prev) => [data, ...prev]);
           loadStats();
           loadTrades();
           loadXmPositions();
@@ -420,6 +427,7 @@ export function AlphaSignalProvider({ children }) {
         xmStatus,
         stats,
         messages,
+        unfilteredMessages,
         messagesLoaded,
         trades,
         tradesLoaded,

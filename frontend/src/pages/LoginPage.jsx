@@ -7,6 +7,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useReducedMotion } from '../hooks/useReducedMotion';
 
+const gisInitializedForClient = { id: '' };
+
 export default function LoginPage() {
   const {
     googleClientId,
@@ -32,18 +34,21 @@ export default function LoginPage() {
       const container = gisContainerRef.current;
       if (gsi && container) {
         try {
-          gsi.initialize({
-            client_id: googleClientId,
-            callback: (response) => {
-              if (!response?.credential) {
-                showToast('No Google credential returned.', 'error');
-                return;
-              }
-              processGoogleAuthPayload({ credential: response.credential });
-            },
-            auto_select: false,
-            cancel_on_tap_outside: true,
-          });
+          if (gisInitializedForClient.id !== googleClientId) {
+            gsi.initialize({
+              client_id: googleClientId,
+              callback: (response) => {
+                if (!response?.credential) {
+                  showToast('No Google credential returned.', 'error');
+                  return;
+                }
+                processGoogleAuthPayload({ credential: response.credential });
+              },
+              auto_select: false,
+              cancel_on_tap_outside: true,
+            });
+            gisInitializedForClient.id = googleClientId;
+          }
           container.innerHTML = '';
           gsi.renderButton(container, {
             theme: 'outline',

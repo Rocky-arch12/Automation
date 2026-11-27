@@ -15,6 +15,7 @@ import { formatLocalTime } from '../utils/dateUtils';
 export default function SignalsPage() {
   const {
     messages,
+    unfilteredMessages,
     signalsDirectionFilter,
     setSignalsDirectionFilter,
     loadMessages,
@@ -24,14 +25,15 @@ export default function SignalsPage() {
   const navigate = useNavigate();
 
   const signals = useMemo(() => {
-    let list = messages.filter(isValidTradeSignal);
+    const source = unfilteredMessages.length > 0 ? unfilteredMessages : messages;
+    let list = source.filter(isValidTradeSignal);
     if (signalsDirectionFilter === 'BUY') {
       list = list.filter((s) => (s.action || '').includes('BUY') || s.action === 'LONG');
     } else if (signalsDirectionFilter === 'SELL') {
       list = list.filter((s) => (s.action || '').includes('SELL') || s.action === 'SHORT');
     }
     return list;
-  }, [messages, signalsDirectionFilter]);
+  }, [messages, unfilteredMessages, signalsDirectionFilter]);
 
   const jumpToWatchlist = (tradeId) => {
     if (!tradeId) return;

@@ -22,6 +22,7 @@ export default function OverviewPage() {
   const {
     stats,
     messages,
+    unfilteredMessages,
     systemStatus,
     xmPositionsData,
     loadStats,
@@ -30,14 +31,16 @@ export default function OverviewPage() {
   } = useAlphaSignal();
   const navigate = useNavigate();
 
+  const chartMessages = unfilteredMessages.length > 0 ? unfilteredMessages : messages;
+
   const recentSignals = useMemo(
-    () => messages.filter(isValidTradeSignal).slice(0, 5),
-    [messages]
+    () => chartMessages.filter(isValidTradeSignal).slice(0, 5),
+    [chartMessages]
   );
 
   // Chart 1: Signal Activity Over Time
   const activityChartData = useMemo(() => {
-    if (!messages.length) {
+    if (!chartMessages.length) {
       return {
         labels: ['-6h', '-5h', '-4h', '-3h', '-2h', '-1h', 'Now'],
         datasets: [
@@ -67,13 +70,13 @@ export default function OverviewPage() {
     }
 
     const buckets = 7;
-    const chunkSize = Math.max(1, Math.floor(messages.length / buckets));
+    const chunkSize = Math.max(1, Math.floor(chartMessages.length / buckets));
     const signalCounts = [];
     const chatterCounts = [];
     const labels = [];
 
     for (let i = 0; i < buckets; i += 1) {
-      const slice = messages.slice(i * chunkSize, (i + 1) * chunkSize);
+      const slice = chartMessages.slice(i * chunkSize, (i + 1) * chunkSize);
       let sigs = 0;
       let chat = 0;
       slice.forEach((m) => {
@@ -111,7 +114,7 @@ export default function OverviewPage() {
         },
       ],
     };
-  }, [messages]);
+  }, [chartMessages]);
 
   const activityChartOptions = useMemo(
     () => ({
@@ -132,7 +135,7 @@ export default function OverviewPage() {
     let sellCount = 0;
     let updateCount = 0;
 
-    messages.forEach((m) => {
+    chartMessages.forEach((m) => {
       const act = (m.action || '').toUpperCase();
       if (act.includes('BUY') || act === 'LONG') buyCount += 1;
       else if (act.includes('SELL') || act === 'SHORT') sellCount += 1;
@@ -152,7 +155,7 @@ export default function OverviewPage() {
         },
       ],
     };
-  }, [messages]);
+  }, [chartMessages]);
 
   const buySellChartOptions = useMemo(
     () => ({
@@ -167,7 +170,7 @@ export default function OverviewPage() {
   // Chart 3: Asset Distribution
   const assetsChartData = useMemo(() => {
     const symbolMap = {};
-    messages.forEach((m) => {
+    chartMessages.forEach((m) => {
       if (m.symbol && m.intent !== 'CHATTER' && m.intent !== 'OTHERS') {
         symbolMap[m.symbol] = (symbolMap[m.symbol] || 0) + 1;
       }
@@ -197,7 +200,7 @@ export default function OverviewPage() {
         },
       ],
     };
-  }, [messages]);
+  }, [chartMessages]);
 
   const assetsChartOptions = useMemo(
     () => ({
@@ -214,7 +217,7 @@ export default function OverviewPage() {
 
   // Chart 4: AI Latency Performance
   const performanceChartData = useMemo(() => {
-    const recent = messages.slice(0, 15).reverse();
+    const recent = chartMessages.slice(0, 15).reverse();
     const labels =
       recent.length > 0
         ? recent.map((_, idx) => `#${idx + 1}`)
@@ -239,7 +242,7 @@ export default function OverviewPage() {
         },
       ],
     };
-  }, [messages]);
+  }, [chartMessages]);
 
   const performanceChartOptions = useMemo(
     () => ({

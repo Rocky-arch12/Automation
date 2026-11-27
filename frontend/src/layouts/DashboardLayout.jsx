@@ -30,6 +30,7 @@ export function DashboardLayout() {
     systemStatus,
     xmStatus,
     messages,
+    unfilteredMessages,
     xmPositionsData,
     wsConnected,
     wsStatusText,
@@ -56,9 +57,10 @@ export function DashboardLayout() {
     return PAGE_TITLES[seg] ? seg : 'dashboard';
   }, [location.pathname]);
 
+  const badgeSource = unfilteredMessages.length > 0 ? unfilteredMessages : messages;
   const validSignalsCount = useMemo(
-    () => messages.filter(isValidTradeSignal).length,
-    [messages]
+    () => badgeSource.filter(isValidTradeSignal).length,
+    [badgeSource]
   );
 
   const listenerRunning = Boolean(systemStatus?.listener?.running);
@@ -150,7 +152,7 @@ export function DashboardLayout() {
               <MessageSquare size={18} />
               <span className="nav-text">Recorded Chats</span>
               <span className="nav-badge" id="nav-chats-badge">
-                {messages.length}
+                {badgeSource.length}
               </span>
             </NavLink>
             <NavLink
