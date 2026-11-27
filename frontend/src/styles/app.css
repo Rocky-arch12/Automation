@@ -1,0 +1,151 @@
+/* React & React Bits integration overrides layered cleanly atop legacy.css */
+
+/* React Router renders active pages directly; keep .page-section visible when mounted */
+.page-section {
+  display: block !important;
+  animation: pageIn 0.22s ease-out both;
+}
+
+/* Ensure React Bits SpotlightCard blends seamlessly with AlphaSignal design tokens */
+.spotlight-card.stat-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-card);
+  padding: 1.15rem 1.35rem;
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+.spotlight-card.stat-card::after {
+  display: none;
+}
+
+.spotlight-card.feature-card {
+  background: var(--bg-card);
+  border-radius: var(--r-lg);
+  padding: 1.75rem;
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+.spotlight-card.signal-card {
+  background: rgba(18, 25, 40, 0.85);
+  border-radius: var(--r-md);
+  padding: 1.15rem;
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-xs);
+}
+
+.spotlight-card.signal-card.trade-card {
+  border-left: 3.5px solid var(--success);
+}
+
+.spotlight-card.signal-card.sell-card {
+  border-left: 3.5px solid var(--danger);
+}
+
+.spotlight-card.signal-card.update-card {
+  border-left: 3.5px solid var(--purple);
+}
+
+.spotlight-card.signal-card.chatter-card {
+  border-left: 3.5px solid var(--text-dim);
+}
+
+.spotlight-card.trade-tracker-card {
+  background: var(--bg-surface-elevated);
+  border-radius: var(--r-md);
+  padding: 1.05rem;
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-xs);
+}
+
+.spotlight-card.auth-box {
+  background: var(--bg-surface);
+  border-radius: var(--r-xl);
+  padding: 2.25rem;
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-xl);
+}
+
+.spotlight-card .spotlight-card__border {
+  display: none;
+}
+
+/* Target trade highlight pulse when navigated from signal pill */
+.trade-tracker-card.trade-highlight {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 18px rgba(59, 130, 246, 0.48) !important;
+}
+
+/* Landing BlurText hero headline container */
+.landing-title-blur {
+  font-size: clamp(2.3rem, 5.5vw, 4rem);
+  font-weight: 900;
+  line-height: 1.12;
+  margin-bottom: 1.4rem;
+  letter-spacing: -0.035em;
+  color: #f8fafc;
+  justify-content: center;
+  text-align: center;
+}
+
+@media (max-width: 680px) {
+  .landing-title-blur {
+    font-size: clamp(1.8rem, 7vw, 2.6rem);
+    margin-bottom: 1.1rem;
+  }
+
+  .spotlight-card.stat-card {
+    padding: 0.75rem 0.85rem;
+    border-radius: var(--r-md);
+  }
+
+  .spotlight-card.signal-card {
+    padding: 0.95rem;
+  }
+
+  .spotlight-card.auth-box {
+    padding: 1.5rem 1.25rem;
+    border-radius: var(--r-lg);
+  }
+}
+
+/* Background React Bits Particles layer on Landing & Auth */
+.particles-bg-layer {
+  position: fixed !important;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.view-foreground {
+  position: relative;
+  z-index: 2;
+}
+
+/* Smooth focusable highlight on preset inject */
+.sim-textarea-flash {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+/* Ensure header icon-button spacing matches legacy UI */
+.app-sidebar .nav-item {
+  text-decoration: none;
+}
+
+/* Ensure toast animations stay controlled by React state cleanly without flicker */
+.toast-notification {
+  animation: toastIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Responsive signals table fallback hints & smooth scrolling */
+.signals-table-wrap {
+  -webkit-overflow-scrolling: touch;
+}
+
+.signals-table th,
+.signals-table td {
+  white-space: nowrap;
+}
