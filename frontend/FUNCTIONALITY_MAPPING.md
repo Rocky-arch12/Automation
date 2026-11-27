@@ -63,7 +63,7 @@ This document maps 100% of the legacy HTML/CSS/Vanilla JS frontend (`static/inde
 - **Stale tunnel auto-heal:** Migrates known expired `trycloudflare.com` hostnames to `CURRENT_ACTIVE_TUNNEL` (`VITE_API_URL` / `https://plod-exonerate-october.ngrok-free.dev`).
 - **Headers & credentials:** Every `/api` and `/uploads` request includes `credentials: "include"`, `ngrok-skip-browser-warning: "true"`, and `Authorization: Bearer <token>` when present.
 - **401 handling:** Clears `AUTH_USER` / `AUTH_TOKEN` and redirects to `/login` when on dashboard routes (excluding auth endpoints).
-- **Whitelist & default entry:** Preserves `ALLOWED_EMAILS = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"]` and exact initial landing/dashboard session recovery logic.
+- **Whitelist & protected entry:** Preserves `ALLOWED_EMAILS = ["riddhesh.firake@gmail.com", "acc94926@gmail.com"]` and enforces strict Google OAuth verification across every route (`/`, `/dashboard`, `/chats`, `/signals`, `/positions`, `/watchlist`, `/simulator`, `/terminal`, `/settings`, `/landing`) so unauthenticated/incognito sessions always route to `/login`.
 
 ---
 

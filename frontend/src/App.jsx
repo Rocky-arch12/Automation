@@ -3,10 +3,9 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import { JsonInspectorModal } from './components/modals/JsonInspectorModal';
 import { QuickSettingsModal } from './components/modals/QuickSettingsModal';
 import { AlphaSignalProvider } from './context/AlphaSignalContext';
-import { AuthProvider, isAuthorizedAdmin, useAuth } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { DashboardLayout } from './layouts/DashboardLayout';
-import { getAuthUser } from './services/apiClient';
 import { DASHBOARD_PAGES } from './utils/constants';
 
 const LandingPage = lazy(() => import('./pages/LandingPage'));
@@ -23,7 +22,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 function PageLoader() {
   return (
     <div className="empty-state" style={{ minHeight: '45vh', justifyContent: 'center' }}>
-      <div className="empty-state-title">Loading AlphaSignal Workspace...</div>
+      <div className="empty-state-title">Verifying Session...</div>
     </div>
   );
 }
@@ -65,33 +64,33 @@ function LegacyHashRouterBridge() {
   return null;
 }
 
-function ProtectedDashboardRoute({ children }) {
-  const { user, authReady } = useAuth();
+function ProtectedRoute({ children }) {
+  const { isAuthenticated, authReady } = useAuth();
   const { showToast } = useToast();
+  const location = useLocation();
   const warnedRef = useRef(false);
 
-  const effectiveUser = user || getAuthUser();
-  const authorized = isAuthorizedAdmin(effectiveUser);
-
   useEffect(() => {
-    if (authReady && !authorized && !warnedRef.current) {
+    if (authReady && !isAuthenticated && !warnedRef.current) {
       warnedRef.current = true;
-      showToast(
-        'Access Restricted: Please select your authorized administrator account to enter.',
-        'warning'
-      );
+      if (location.pathname !== '/' && location.pathname !== '/dashboard') {
+        showToast(
+          'Authentication required. Please sign in with your authorized Google account.',
+          'warning'
+        );
+      }
     }
-    if (authorized) {
+    if (isAuthenticated) {
       warnedRef.current = false;
     }
-  }, [authReady, authorized, showToast]);
+  }, [authReady, isAuthenticated, location.pathname, showToast]);
 
   if (!authReady) {
     return <PageLoader />;
   }
 
-  if (!authorized) {
-    return <Navigate to="/login" replace />;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   return children;
@@ -103,16 +102,24 @@ function AppRoutes() {
       <LegacyHashRouterBridge />
       <Suspense fallback={<PageLoader />}>
         <Routes>
-          <Route path="/landing" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<Navigate to="/login" replace />} />
 
           <Route
+            path="/landing"
+            element={
+              <ProtectedRoute>
+                <LandingPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/"
             element={
-              <ProtectedDashboardRoute>
+              <ProtectedRoute>
                 <DashboardLayout />
-              </ProtectedDashboardRoute>
+              </ProtectedRoute>
             }
           >
             <Route index element={<Navigate to="/dashboard" replace />} />
@@ -126,7 +133,7 @@ function AppRoutes() {
             <Route path="settings" element={<SettingsPage />} />
           </Route>
 
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Suspense>
       <QuickSettingsModal />
