@@ -12,32 +12,49 @@ import {
   getAuthUser,
   registerApiHandlers,
 } from '../services/apiClient';
-import { ALLOWED_GOOGLE_EMAILS, DEFAULT_FALLBACK_USER } from '../utils/constants';
+import { ALLOWED_GOOGLE_EMAILS } from '../utils/constants';
 import { useToast } from './ToastContext';
 
 const AuthContext = createContext(null);
 
 export function isAuthorizedAdmin(user) {
   if (!user || !user.email) return false;
-  return ALLOWED_GOOGLE_EMAILS.includes(user.email.toLowerCase());
+  return ALLOWED_GOOGLE_EMAILS.includes(user.email.toLowerCase().trim());
+}
+
+function hasValidNonExpiredJwt(token) {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(base64);
+    const payload = JSON.parse(json);
+    if (!payload?.email || !ALLOWED_GOOGLE_EMAILS.includes(String(payload.email).toLowerCase().trim())) {
+      return false;
+    }
+    if (payload.exp && payload.exp * 1000 <= Date.now()) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem('AUTH_TOKEN');
+  localStorage.removeItem('AUTH_USER');
 }
 
 export function AuthProvider({ children }) {
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState(() => getAuthUser());
+  const [user, setUser] = useState(null);
   const [googleClientId, setGoogleClientId] = useState('');
   const [authReady, setAuthReady] = useState(false);
   const locationRef = useRef(location);
-  const initialEntryRef = useRef(
-    typeof window !== 'undefined'
-      ? {
-          pathname: window.location.pathname.toLowerCase(),
-          hash: (window.location.hash || '').replace('#', '').toLowerCase().trim(),
-        }
-      : { pathname: '/', hash: '' }
-  );
 
   useEffect(() => {
     locationRef.current = location;
@@ -48,7 +65,7 @@ export function AuthProvider({ children }) {
       try {
         showToast('Verifying Google account with security whitelist...', 'info');
         const { ok, data } = await authenticateWithGoogle(payload);
-        if (ok && data?.user) {
+        if (ok && data?.user && isAuthorizedAdmin(data.user)) {
           if (data.token) localStorage.setItem('AUTH_TOKEN', data.token);
           localStorage.setItem('AUTH_USER', JSON.stringify(data.user));
           setUser(data.user);
@@ -59,6 +76,8 @@ export function AuthProvider({ children }) {
           navigate('/dashboard', { replace: true });
           return true;
         }
+        clearStoredAuth();
+        setUser(null);
         showToast(data?.detail || 'Access Denied: Google email not authorized.', 'error');
         return false;
       } catch (e) {
@@ -73,21 +92,26 @@ export function AuthProvider({ children }) {
     const token = getAuthToken();
     const hasCookie = typeof document !== 'undefined' && document.cookie.includes('access_token');
     if (!token && !hasCookie) {
+      clearStoredAuth();
+      setUser(null);
       return null;
     }
     try {
       const res = await fetchCurrentUser();
       if (res.ok) {
         const data = await res.json();
-        if (data?.user) {
+        if (data?.user && isAuthorizedAdmin(data.user)) {
           localStorage.setItem('AUTH_USER', JSON.stringify(data.user));
           if (data.token) localStorage.setItem('AUTH_TOKEN', data.token);
           setUser(data.user);
           return data.user;
         }
-      } else if (res.status === 401) {
-        localStorage.removeItem('AUTH_USER');
-        localStorage.removeItem('AUTH_TOKEN');
+        clearStoredAuth();
+        setUser(null);
+        return null;
+      }
+      if (res.status === 401 || res.status === 403) {
+        clearStoredAuth();
         setUser(null);
         return null;
       }
@@ -95,38 +119,36 @@ export function AuthProvider({ children }) {
       console.warn('Session check offline or tunnel not connected yet:', e.message);
     }
 
+    // Only keep cached user during temporary network outage if backed by a non-expired whitelisted JWT
     const localUser = getAuthUser();
-    if (localUser && !isAuthorizedAdmin(localUser)) {
-      localStorage.removeItem('AUTH_USER');
-      localStorage.removeItem('AUTH_TOKEN');
-      setUser(null);
-      return null;
+    if (token && hasValidNonExpiredJwt(token) && isAuthorizedAdmin(localUser)) {
+      setUser(localUser);
+      return localUser;
     }
-    setUser(localUser);
-    return localUser;
+
+    clearStoredAuth();
+    setUser(null);
+    return null;
   }, []);
 
   // Register global 401 & tunnel connection toast handlers
   useEffect(() => {
     registerApiHandlers({
       onUnauthorized: () => {
-        const wasUser = getAuthUser();
-        if (wasUser) {
-          localStorage.removeItem('AUTH_USER');
-          localStorage.removeItem('AUTH_TOKEN');
-          setUser(null);
-          const p = locationRef.current.pathname;
-          if (p !== '/landing' && p !== '/login') {
-            navigate('/login');
-            showToast('Session expired. Please sign in again.', 'info');
-          }
+        const hadSession = Boolean(getAuthToken() || getAuthUser());
+        clearStoredAuth();
+        setUser(null);
+        const p = locationRef.current.pathname;
+        if (hadSession && p !== '/login' && p !== '/register') {
+          navigate('/login', { replace: true });
+          showToast('Session expired. Please sign in again.', 'info');
         }
       },
       onTunnelToast: (msg, type) => showToast(msg, type),
     });
   }, [navigate, showToast]);
 
-  // Bootstrap query param, OAuth redirect hash, auth config, and initial session
+  // Bootstrap query param, OAuth redirect hash, auth config, and strict session verification
   useEffect(() => {
     let active = true;
 
@@ -161,27 +183,11 @@ export function AuthProvider({ children }) {
         console.warn('Auth config fetch warning:', e.message);
       }
 
-      // 3. Check persisted session
-      const sessionUser = await checkAuthSession();
-      if (!active) return;
-
-      const currentPath = initialEntryRef.current.pathname;
-      const rawHash = initialEntryRef.current.hash;
-      const isPublicEntry =
-        currentPath === '/landing' ||
-        currentPath === '/login' ||
-        currentPath === '/register' ||
-        ['landing', 'features', 'architecture', 'security', 'login', 'register'].includes(rawHash);
-
-      if (!isPublicEntry) {
-        let effectiveUser = sessionUser || getAuthUser();
-        if (!effectiveUser) {
-          effectiveUser = DEFAULT_FALLBACK_USER;
-          localStorage.setItem('AUTH_USER', JSON.stringify(effectiveUser));
-        }
-        setUser(effectiveUser);
+      // 3. Strictly verify persisted session (no unauthenticated fallback)
+      await checkAuthSession();
+      if (active) {
+        setAuthReady(true);
       }
-      setAuthReady(true);
     }
 
     bootstrap();
@@ -218,8 +224,7 @@ export function AuthProvider({ children }) {
   }, [googleClientId, showToast]);
 
   const handleDashboardAccess = useCallback(() => {
-    const current = user || getAuthUser();
-    if (isAuthorizedAdmin(current)) {
+    if (isAuthorizedAdmin(user)) {
       navigate('/dashboard');
     } else {
       showToast(
@@ -236,17 +241,17 @@ export function AuthProvider({ children }) {
     } catch (e) {
       console.warn('Logout request failed:', e);
     }
-    localStorage.removeItem('AUTH_TOKEN');
-    localStorage.removeItem('AUTH_USER');
+    clearStoredAuth();
     setUser(null);
     showToast('Signed out safely. Your credentials remain isolated & encrypted.', 'info');
-    navigate('/landing');
+    navigate('/login', { replace: true });
   }, [navigate, showToast]);
 
   return (
     <AuthContext.Provider
       value={{
         user,
+        isAuthenticated: isAuthorizedAdmin(user),
         googleClientId,
         authReady,
         processGoogleAuthPayload,

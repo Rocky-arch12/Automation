@@ -18,12 +18,6 @@ export const ALLOWED_GOOGLE_EMAILS = [
   'acc94926@gmail.com',
 ];
 
-export const DEFAULT_FALLBACK_USER = {
-  email: 'riddhesh.firake@gmail.com',
-  name: 'Riddhesh Firake (Admin)',
-  provider: 'google',
-};
-
 export const SIMULATOR_PRESETS = {
   PENDING:
     'BE READY ON THIS LEVEL 2640-2642 XAUUSD BUY WAIT FOR 1 MIN ENGULFING OR EVENING STAR CONFIRMATION SL 2634 TP 2655',

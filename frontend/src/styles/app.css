@@ -4,9 +4,47 @@
 .page-section {
   display: block !important;
   animation: pageIn 0.22s ease-out both;
+  min-width: 0;
+  max-width: 100%;
 }
 
-/* Ensure React Bits SpotlightCard blends seamlessly with AlphaSignal design tokens */
+/* Lock app-main & containers to available shell width so wide children never clip off-screen */
+.app-main {
+  min-width: 0;
+  width: calc(100% - 260px);
+  max-width: calc(100% - 260px);
+}
+
+.app-shell.sidebar-collapsed .app-main {
+  width: calc(100% - 72px);
+  max-width: calc(100% - 72px);
+}
+
+@media (max-width: 1024px) {
+  .app-main,
+  .app-shell.sidebar-collapsed .app-main {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+.app-page-container {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Ensure React Bits SpotlightCard blends seamlessly with AlphaSignal design tokens
+   CRITICAL: SpotlightCard sets overflow:hidden, so flex-shrink:0 prevents flex-column squashing */
+.signal-card,
+.trade-tracker-card,
+.spotlight-card.stat-card,
+.spotlight-card.feature-card,
+.spotlight-card.signal-card,
+.spotlight-card.trade-tracker-card {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
 .spotlight-card.stat-card {
   background: var(--bg-card);
   border-radius: var(--radius-card);
@@ -197,6 +235,21 @@
   .status-badges-scroller::-webkit-scrollbar {
     display: none;
   }
+}
+
+.signal-card-header,
+.raw-message-box,
+.ai-box,
+.meta-footer {
+  min-width: 0;
+}
+
+.chats-filter-header {
+  max-width: 100%;
+}
+
+.chats-search-box {
+  min-width: 180px;
 }
 
 /* Ensure header icon-button spacing matches legacy UI */
