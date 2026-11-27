@@ -209,6 +209,25 @@ async def lifespan(app: FastAPI):
                 print(f"[EXPIRATION WORKER ERROR] {ex}")
 
     # Background worker: 24/7 Telegram Listener Watchdog & Auto-Reconnector
+    async def _get_saved_tg_creds():
+        cur_settings = await get_all_settings()
+        saved_channels = None
+        async with get_db() as conn:
+            cursor = await conn.execute(
+                "SELECT value FROM user_settings WHERE key = 'TELEGRAM_SELECTED_CHANNELS' ORDER BY rowid DESC LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row and row["value"]:
+                try:
+                    saved_channels = decrypt_credential(row["value"])
+                except Exception:
+                    saved_channels = row["value"]
+        if not saved_channels:
+            saved_channels = cur_settings.get("TELEGRAM_SELECTED_CHANNELS") or cur_settings.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
+        aid = cur_settings.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
+        ahash = cur_settings.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+        return saved_channels, (int(aid) if aid else None), ahash
+
     async def _listener_watchdog():
         await asyncio.sleep(8)
         while True:
@@ -216,27 +235,11 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(35)
                 session_file = settings.BASE_DIR / "alpha_session.session"
                 if not listener_manager.is_running and session_file.exists():
-                    cur_settings = await get_all_settings()
-                    saved_channels = None
-                    async with get_db() as conn:
-                        cursor = await conn.execute(
-                            "SELECT value FROM user_settings WHERE key = 'TELEGRAM_SELECTED_CHANNELS' ORDER BY rowid DESC LIMIT 1"
-                        )
-                        row = await cursor.fetchone()
-                        if row and row["value"]:
-                            try:
-                                saved_channels = decrypt_credential(row["value"])
-                            except Exception:
-                                saved_channels = row["value"]
-                    if not saved_channels:
-                        saved_channels = cur_settings.get("TELEGRAM_SELECTED_CHANNELS") or cur_settings.get("TELEGRAM_CHANNEL_ID") or settings.TELEGRAM_CHANNEL_ID
-
-                    aid = cur_settings.get("TELEGRAM_API_ID") or settings.TELEGRAM_API_ID
-                    ahash = cur_settings.get("TELEGRAM_API_HASH") or settings.TELEGRAM_API_HASH
+                    saved_channels, aid_int, ahash = await _get_saved_tg_creds()
                     print("[WATCHDOG] Telegram listener is idle. Auto-starting 24/7 background listener...")
                     await listener_manager.start_client_listener(
                         target_channel=saved_channels,
-                        api_id=int(aid) if aid else None,
+                        api_id=aid_int,
                         api_hash=ahash
                     )
                     await ws_manager.broadcast({
@@ -246,27 +249,30 @@ async def lifespan(app: FastAPI):
                             "listener_mode": listener_manager.active_mode
                         }
                     })
-                elif listener_manager.client and not listener_manager.client.is_connected():
-                    print("[WATCHDOG] Telethon socket disconnected. Reconnecting MTProto...")
-                    await listener_manager.client.connect()
-                    try:
-                        from telethon.tl import functions as tl_functions
-                        await listener_manager.client(tl_functions.updates.GetStateRequest())
-                    except Exception:
-                        pass
+                elif listener_manager.client and not listener_manager.client.is_connected() and session_file.exists():
+                    # Recycle the client cleanly instead of bare .connect() so Telethon does not get stuck in a 60s reconnect loop
+                    print("[WATCHDOG] Telethon socket disconnected. Recycling client cleanly...")
+                    saved_channels, aid_int, ahash = await _get_saved_tg_creds()
+                    await listener_manager.start_client_listener(
+                        target_channel=saved_channels,
+                        api_id=aid_int,
+                        api_hash=ahash
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as ex:
                 print(f"[LISTENER WATCHDOG WARNING] {ex}")
 
-    # Background worker: 5-Second 1:1 Auto-Management & Closed Deal Sync
+    # Background worker: Fast 1.5s 1:1 CTC Auto-Management & 6s Closed Deal Sync
     async def _xm_1to1_worker():
+        sync_cycle = 0
         while True:
             try:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1.5)
+                sync_cycle += 1
                 if xm_executor.is_connected:
                     managed = await xm_executor.check_and_manage_1to1_positions()
-                    closed = await xm_executor.sync_closed_mt5_trades()
+                    closed = await xm_executor.sync_closed_mt5_trades() if (sync_cycle % 4 == 0) else []
                     if managed or closed:
                         await ws_manager.broadcast({
                             "type": "XM_POSITIONS_UPDATE",

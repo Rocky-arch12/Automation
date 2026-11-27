@@ -146,6 +146,37 @@ def _parse_utc_timestamp(ts_val: Any) -> Optional[float]:
     except Exception:
         return None
 
+TERMINAL_STATUSES = (
+    "CANCELLED",
+    "FAILED_EXECUTION",
+    "SL_HIT",
+    "TP_HIT",
+    "REJECTED_NO_SL_TP",
+    "BLOCKED_BY_SAFETY_SHIELD",
+)
+
+def _symbols_match(sym_a: Optional[str], sym_b: Optional[str]) -> bool:
+    """Matches equivalent broker/signal aliases (e.g. GOLD/XAUUSD, BTCUSD/BTCUSDT)."""
+    def _canon(s: Optional[str]) -> str:
+        u = re.sub(r'[^A-Z0-9]', '', (s or "").upper())
+        if "XAU" in u or "GOLD" in u:
+            return "XAUUSD"
+        if "BTC" in u or "BITCOIN" in u:
+            return "BTCUSD"
+        return u
+    a, b = _canon(sym_a), _canon(sym_b)
+    return bool(a and b and a == b)
+
+def _failure_outcome_fields(xm_res: Dict[str, Any]) -> tuple[str, str, str]:
+    """Maps non-success XM result into (status, outcome, return_action)."""
+    err_msg = xm_res.get("message", "XM MT5 order failed")
+    xm_status = xm_res.get("status")
+    if xm_status == "AUTO_EXECUTION_DISABLED":
+        return "PENDING", "XM Auto-Execution OFF (Manual Mode)", "AUTO_EXECUTION_OFF"
+    if xm_status == "STALE_SIGNAL_ALREADY_AT_1TO1":
+        return "CANCELLED", "Skipped: Market already passed owner 1:1", "STALE_SIGNAL_SKIPPED"
+    return "FAILED_EXECUTION", f"XM MT5: {err_msg}", "EXECUTION_FAILED"
+
 async def find_duplicate_trade(
     symbol: str,
     action: str,
@@ -155,19 +186,20 @@ async def find_duplicate_trade(
     max_recent_seconds: int = 180
 ) -> Optional[Dict[str, Any]]:
     """
-    Checks if an identical trade setup was recently created, is pending, or is already
-    running on MT5 with the same symbol, action, and Stop Loss to prevent duplicate execution.
+    Checks if an identical trade setup was recently created, is pending, is already
+    running on MT5 (matching current SL OR original initial_sl), or was already executed/closed
+    from the exact same owner chart levels within 6 hours.
     """
     try:
         async with get_db() as conn:
             cursor = await conn.execute("""
-                SELECT id, trade_id, symbol, action, entry_price, sl, status, is_active,
-                       channel_id, channel_title, created_at
+                SELECT id, trade_id, symbol, action, entry_price, owner_entry, initial_sl, sl,
+                       status, is_active, channel_id, channel_title, created_at
                 FROM trades
-                WHERE symbol = ? AND action = ?
-                ORDER BY id DESC LIMIT 5
-            """, (symbol, action))
-            rows = [dict(r) for r in await cursor.fetchall()]
+                WHERE action = ?
+                ORDER BY id DESC LIMIT 20
+            """, (action,))
+            rows = [dict(r) for r in await cursor.fetchall() if _symbols_match(r["symbol"], symbol)]
 
         now_ts = datetime.now(timezone.utc).timestamp()
         for row in rows:
@@ -177,17 +209,28 @@ async def find_duplicate_trade(
             age_seconds = now_ts - trade_ts
 
             row_entry = parse_entry_price(row.get("entry_price"))
+            row_owner_entry = float(row.get("owner_entry")) if row.get("owner_entry") else row_entry
             row_sl = parse_price(row.get("sl"))
+            row_initial_sl = float(row.get("initial_sl")) if row.get("initial_sl") else row_sl
             status = row.get("status")
 
-            # Check 1: Live open position with the exact same Stop Loss (prevents re-entering on chart updates)
+            # Check 1: Live open position with the exact same SL OR original initial_sl (prevents re-entering after 1:1 CTC moves SL)
             if status in ["EXECUTED", "ACTIVE"] and row.get("is_active") == 1:
-                if sl_float > 0 and row_sl > 0:
-                    if abs(sl_float - row_sl) <= 1.0:
+                if sl_float > 0:
+                    for cand_sl in (row_sl, row_initial_sl):
+                        if cand_sl > 0 and (abs(sl_float - cand_sl) <= 1.0 or abs(sl_float - cand_sl) / cand_sl <= 0.002):
+                            return row
+
+            # Check 1B: Progress screenshot / holding update of an identical owner chart setup within 6 hours
+            if status in ["EXECUTED", "ACTIVE", "TP_HIT", "SL_HIT"] and age_seconds <= 21600:
+                if entry_float > 0 and sl_float > 0 and row_owner_entry > 0 and row_initial_sl > 0:
+                    entry_diff = abs(entry_float - row_owner_entry) / row_owner_entry
+                    sl_diff = abs(sl_float - row_initial_sl) / row_initial_sl
+                    if entry_diff <= 0.001 and sl_diff <= 0.0005:
                         return row
 
-            # Check 2: Extremely recent non-terminal setup (<= 180s = 3 mins) on the same symbol and action
-            if age_seconds <= max_recent_seconds and status not in ["CANCELLED", "FAILED_EXECUTION", "SL_HIT", "TP_HIT"]:
+            # Check 2: Extremely recent non-terminal setup (<= 180s = 3 mins) on the same symbol family and action
+            if age_seconds <= max_recent_seconds and status not in TERMINAL_STATUSES:
                 if entry_float > 0 and row_entry > 0:
                     diff_ratio = abs(entry_float - row_entry) / row_entry
                     if diff_ratio <= 0.0035:
@@ -314,19 +357,19 @@ async def correlate_and_process_trade(
                 )
                 return {"trade_id": target_tid, "action": "ACTIVATED_AND_EXECUTED", "ticket": ticket, "lots": lots, "xm_response": xm_res}
             else:
+                new_status, outcome_msg, ret_action = _failure_outcome_fields(xm_res)
                 err_msg = xm_res.get("message", "Unknown MT5 error")
-                is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
                 await update_trade_outcome(
                     trade_id=target_tid,
-                    new_status="PENDING" if is_disabled else "FAILED_EXECUTION",
-                    outcome="XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
-                    notes=err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}",
+                    new_status=new_status,
+                    outcome=outcome_msg,
+                    notes=err_msg if new_status != "FAILED_EXECUTION" else f"Execution rejected by MT5 terminal: {err_msg}",
                     message_id=message_id,
                     new_sl=str(final_sl),
                     xm_response=json.dumps(xm_res)
                 )
                 await update_message_trade_id(message_id, target_tid)
-                return {"trade_id": target_tid, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
+                return {"trade_id": target_tid, "action": ret_action, "reason": err_msg}
 
     # -------------------------------------------------------------
     # 1. NEW TRADE SETUP
@@ -433,26 +476,28 @@ async def correlate_and_process_trade(
                     await update_message_trade_id(message_id, trade_id)
                     return {"trade_id": trade_id, "action": "EXECUTED_ON_XM", "ticket": ticket, "lots": lots, "xm_response": xm_res}
                 else:
+                    new_status, outcome_msg, ret_action = _failure_outcome_fields(xm_res)
                     err_msg = xm_res.get("message", "XM MT5 order failed")
-                    is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
                     await create_trade({
                         "trade_id": trade_id,
                         "symbol": symbol,
                         "action": action,
                         "order_type": order_type,
                         "entry_price": str(entry_float) if entry_float else "CMP",
+                        "owner_entry": float(entry_float) if entry_float > 0 else None,
+                        "initial_sl": float(final_sl),
                         "sl": str(final_sl),
                         "tp_levels": [str(final_tp)] if final_tp else [],
-                        "status": "PENDING" if is_disabled else "FAILED_EXECUTION",
-                        "outcome": "XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
+                        "status": new_status,
+                        "outcome": outcome_msg,
                         "initial_message_id": message_id,
                         "channel_id": channel_id,
                         "channel_title": channel_title,
                         "xm_response": json.dumps(xm_res),
-                        "pnl_notes": err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}"
+                        "pnl_notes": err_msg if new_status != "FAILED_EXECUTION" else f"Execution rejected by MT5 terminal: {err_msg}"
                     })
                     await update_message_trade_id(message_id, trade_id)
-                    return {"trade_id": trade_id, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
+                    return {"trade_id": trade_id, "action": ret_action, "reason": err_msg}
 
             else:
                 # Active trade announced without SL yet (e.g. "Active trade" or chart sent first)
@@ -540,15 +585,16 @@ async def correlate_and_process_trade(
                 target_trade = active_list[0]
                 target_tid = target_trade["trade_id"]
 
-        # If target_trade is already in a terminal state (CANCELLED, FAILED_EXECUTION, SL_HIT, TP_HIT):
-        if target_trade and target_trade.get("status") in ["CANCELLED", "FAILED_EXECUTION", "SL_HIT", "TP_HIT"]:
+        # If target_trade is already in a terminal state:
+        if target_trade and target_trade.get("status") in TERMINAL_STATUSES:
             term_status = target_trade.get("status")
-            if update_type == "ACTIVATE" or (is_active_now and sl_float > 0):
+            # Only explicit ACTIVATE rescues a stale/cancelled target; INFO updates (e.g. "LONG HOLDING...") stay commentary
+            if update_type == "ACTIVATE":
                 # First check if there is a newer pending trade in this channel for the same symbol
                 retargeted = None
                 for pt in await get_channel_pending_trades(channel_id, channel_title):
                     pt_sym = normalize_symbol(pt.get("symbol"), "")
-                    if pt_sym == symbol or not symbol:
+                    if _symbols_match(pt_sym, symbol) or not symbol:
                         retargeted = pt
                         break
                 if retargeted:
@@ -707,18 +753,18 @@ async def correlate_and_process_trade(
                     )
                     return {"trade_id": target_tid, "action": "ACTIVATED_AND_EXECUTED", "ticket": ticket, "lots": lots, "xm_response": xm_res}
                 else:
+                    new_status, outcome_msg, ret_action = _failure_outcome_fields(xm_res)
                     err_msg = xm_res.get("message", "XM MT5 order failed")
-                    is_disabled = xm_res.get("status") == "AUTO_EXECUTION_DISABLED"
                     await update_trade_outcome(
                         trade_id=target_tid,
-                        new_status="PENDING" if is_disabled else "FAILED_EXECUTION",
-                        outcome="XM Auto-Execution OFF (Manual Mode)" if is_disabled else f"XM MT5: {err_msg}",
-                        notes=err_msg if is_disabled else f"Execution rejected by MT5 terminal: {err_msg}",
+                        new_status=new_status,
+                        outcome=outcome_msg,
+                        notes=err_msg if new_status != "FAILED_EXECUTION" else f"Execution rejected by MT5 terminal: {err_msg}",
                         message_id=message_id,
                         new_sl=str(final_sl),
                         xm_response=json.dumps(xm_res)
                     )
-                    return {"trade_id": target_tid, "action": "AUTO_EXECUTION_OFF" if is_disabled else "EXECUTION_FAILED", "reason": err_msg}
+                    return {"trade_id": target_tid, "action": ret_action, "reason": err_msg}
 
             elif update_type == "CANCEL":
                 await update_trade_outcome(

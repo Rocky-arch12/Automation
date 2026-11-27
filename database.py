@@ -216,8 +216,12 @@ async def init_db():
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trade_events_tid ON trade_events(trade_id)")
 
-        # Data hygiene: ensure FAILED_EXECUTION rows never stay flagged as active
-        await conn.execute("UPDATE trades SET is_active = 0 WHERE status = 'FAILED_EXECUTION' AND is_active = 1")
+        # Data hygiene: ensure terminal/rejected rows never stay flagged as active
+        await conn.execute("""
+            UPDATE trades SET is_active = 0
+            WHERE status IN ('FAILED_EXECUTION', 'REJECTED_NO_SL_TP', 'BLOCKED_BY_SAFETY_SHIELD')
+              AND is_active = 1
+        """)
 
         await conn.commit()
         
@@ -513,7 +517,7 @@ async def create_trade(data: Dict[str, Any]) -> str:
 
     status = data.get("status", "PENDING")
     outcome = data.get("outcome", "Pending Setup (Awaiting Owner Confirmation)")
-    is_active = 0 if status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION"] else 1
+    is_active = 0 if status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION", "REJECTED_NO_SL_TP", "BLOCKED_BY_SAFETY_SHIELD"] else 1
     init_msg_id = data.get("initial_message_id")
     channel_id = data.get("channel_id")
     channel_title = data.get("channel_title")
@@ -569,7 +573,7 @@ async def update_trade_outcome(
     initial_sl: Optional[float] = None
 ):
     """Updates a trade's lifecycle outcome and appends to the trade_events audit trail."""
-    is_terminal = new_status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION"]
+    is_terminal = new_status in ["CANCELLED", "SL_HIT", "TP_HIT", "FAILED_EXECUTION", "REJECTED_NO_SL_TP", "BLOCKED_BY_SAFETY_SHIELD"]
     is_active = 0 if is_terminal else 1
 
     async with get_db() as conn:
@@ -709,12 +713,45 @@ async def get_channel_active_trades(
     query = """
         SELECT * FROM trades 
         WHERE status = 'EXECUTED' AND is_active = 1
+          AND created_at >= datetime('now', '-2 days')
     """
     params = []
     if channel_id and channel_id != "unknown":
         query += " AND (channel_id = ? OR channel_id IS NULL OR channel_id = '' OR channel_title = ?)"
         params.extend([channel_id, channel_title or ""])
     query += " ORDER BY id DESC"
+
+    async with get_db() as conn:
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
+        results = [dict(r) for r in rows]
+        for d in results:
+            if d.get("tp_levels"):
+                try:
+                    d["tp_levels"] = json.loads(d["tp_levels"])
+                except Exception:
+                    d["tp_levels"] = [d["tp_levels"]]
+        return results
+
+async def get_channel_recent_trades(
+    channel_id: Optional[str] = None,
+    channel_title: Optional[str] = None,
+    hours: int = 12,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """Returns recently completed or active trades in this channel so AI recognizes follow-up progress charts."""
+    query = f"""
+        SELECT trade_id, symbol, action, entry_price, owner_entry, initial_sl, sl, tp_levels, status, created_at
+        FROM trades
+        WHERE status IN ('EXECUTED', 'TP_HIT', 'SL_HIT')
+          AND created_at >= datetime('now', '-{int(hours)} hours')
+    """
+    params = []
+    if channel_id and channel_id != "unknown":
+        query += " AND (channel_id = ? OR channel_id IS NULL OR channel_id = '' OR channel_title = ?)"
+        params.extend([channel_id, channel_title or ""])
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
 
     async with get_db() as conn:
         cursor = await conn.execute(query, params)

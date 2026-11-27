@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 from config import settings
-from database import get_all_settings
+from database import get_all_settings, get_channel_recent_trades
 from engine.vision_processor import process_and_encode_image, analyze_chart_with_cv
 
 SYSTEM_PROMPT = """You are the AlphaSignal AI Trading & Intent Classifier for the VIP Telegram Channels 'ALPHA PREMIUM' and 'Alpha Trades'.
@@ -32,9 +32,10 @@ The channel owner communicates in English, Hindi, and Hinglish. Understand the n
       - "ACTIVATE": Owner EXPLICITLY activates a recent pending setup or signals immediate confirmation (e.g. "Level tapped now active", "Confirm candle ban gayi active", "5 min engulfing per active kr dena\nActive").
         * IMPORTANT: If the previous setup in history is already CANCELLED / SL_HIT / TP_HIT (or >2 hours old) and the owner sends a fresh chart with Entry/SL/TP and "Active", classify as "NEW_TRADE" with "is_active_now": true (and "target_trade_id": null)!
       - "CANCEL": Owner cancels a setup ("Cancel this level", "Active mat krna").
-      - "INFO": Commentary or level touch alert on a setup/running trade:
+      - "INFO": Commentary, level touch, holding advice, or R:R milestone on an existing setup/running/recent trade:
         * "Level tapped" / "Level taped" / "Zone tapped" ALONE (without words like "active", "enter", "executed") ONLY means price reached the watchlist zone and is still awaiting candle confirmation -> MUST be "update_type": "INFO" and "is_active_now": false (NEVER "ACTIVATE"!).
-        * Running trade commentary ("1:1 done move SL to BE", "Running 100 pips", "Book partials here", "TP1 HIT AGAIN").
+        * Running trade commentary or R:R milestones ("1:1 done", "1:1 then sl", "3676 per 1:1 hojayga", "LONG HOLDING KAR SKTE HO GUYS IS TRADE MAI", "Book partials here", "TP1 HIT AGAIN") -> MUST be "TRADE_UPDATE" with "update_type": "INFO" and "is_active_now": false!
+        * EMPTY TEXT IMAGE RULE: A chart screenshot sent with NO accompanying text ('[Chart Screenshot Broadcast]') is NEVER an immediate market execution by itself unless the immediately preceding message (<3 mins) announced an 'Active trade'. Set "is_active_now": false (PENDING) for fresh charts, or classify as "TRADE_UPDATE" ("INFO") / "OTHERS" ("is_active_now": false) if its levels match an active or recently completed trade in history or candles already moved >50% towards TP!
 
    c. "OTHERS" (Non-Actionable Content - NEVER Execute as a Trade!):
       - Profit celebrations / recaps ("200 pips boom 🚀", "250 pips done guys 😂", "Gold flying 💸", "40 PIPS DONE", "110 PIPS DONE").
@@ -82,7 +83,8 @@ def build_context_prompt(
     history_messages: Optional[List[Dict[str, Any]]] = None,
     pending_trades: Optional[List[Dict[str, Any]]] = None,
     active_trades: Optional[List[Dict[str, Any]]] = None,
-    current_cv_info: Optional[Dict[str, Any]] = None
+    current_cv_info: Optional[Dict[str, Any]] = None,
+    recent_trades: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     lines = []
     lines.append(f"Telegram Channel: {channel_title or 'ALPHA PREMIUM'}")
@@ -111,14 +113,25 @@ def build_context_prompt(
             t_id = at.get("trade_id")
             sym = at.get("symbol")
             act = at.get("action")
-            ent = at.get("entry_price")
-            sl = at.get("sl")
+            ent = at.get("owner_entry") or at.get("entry_price")
+            sl = at.get("initial_sl") or at.get("sl")
             tp = at.get("tp_levels")
             ticket = at.get("xm_ticket")
-            lines.append(f"- ID: {t_id} | Symbol: {sym} | Action: {act} | Entry: {ent} | SL: {sl} | TP: {tp} | XM Ticket: #{ticket} | Status: EXECUTED (Hands-Off)")
+            lines.append(f"- ID: {t_id} | Symbol: {sym} | Action: {act} | OwnerEntry: {ent} | InitialSL: {sl} | CurrentSL: {at.get('sl')} | TP: {tp} | XM Ticket: #{ticket} | Status: EXECUTED (Hands-Off)")
     else:
         lines.append("- (No active running positions)")
     lines.append("")
+
+    # 2B. Recently Executed/Completed Trades (so follow-up progress screenshots are not re-entered)
+    if recent_trades:
+        lines.append("RECENT CHANNEL TRADES (Last 12h — already traded/completed, do NOT re-open as NEW_TRADE):")
+        for rt in recent_trades:
+            lines.append(
+                f"- ID: {rt.get('trade_id')} | Symbol: {rt.get('symbol')} | Action: {rt.get('action')} "
+                f"| OwnerEntry: {rt.get('owner_entry') or rt.get('entry_price')} | InitialSL: {rt.get('initial_sl') or rt.get('sl')} "
+                f"| TP: {rt.get('tp_levels')} | Status: {rt.get('status')}"
+            )
+        lines.append("")
 
     # 3. Past 10 Messages
     lines.append("RECENT CHANNEL HISTORY (Last up to 10 messages in chronological order):")
@@ -485,6 +498,13 @@ async def analyze_message_with_ai(
     if resolved_path and os.path.exists(resolved_path):
         cv_info = analyze_chart_with_cv(resolved_path) or {"has_image": True}
 
+    # Recent channel trades (12h) for progress screenshot awareness
+    recent_trades = []
+    try:
+        recent_trades = await get_channel_recent_trades(channel_id=channel_id, channel_title=channel_title, hours=12, limit=5)
+    except Exception:
+        pass
+
     # Context Prompt with history and trades
     user_context_prompt = build_context_prompt(
         text=text,
@@ -492,7 +512,8 @@ async def analyze_message_with_ai(
         history_messages=history_messages,
         pending_trades=pending_trades,
         active_trades=active_trades,
-        current_cv_info=cv_info
+        current_cv_info=cv_info,
+        recent_trades=recent_trades
     )
 
     groq_key = api_key if (active_provider == "groq" and api_key) else (stored.get("GROQ_API_KEY") or settings.GROQ_API_KEY)
@@ -692,6 +713,16 @@ def _normalize_ai_response(
     # Truly respect AI's semantic decision on whether this is an immediate live execution
     # or a conditional plan/idea (NO naive regex keyword overrides!):
     is_active_now = bool(parsed.get("is_active_now", False)) if intent != "OTHERS" else False
+
+    # Safety guard: a textless chart screenshot alone must never fire a market execution blindly
+    # unless the preceding message announced an active trade within 3 minutes
+    if intent == "NEW_TRADE" and is_active_now and not (raw_text or "").strip():
+        has_recent_lead = False
+        if history_messages:
+            last_txt = (history_messages[-1].get("text") or "").upper()
+            has_recent_lead = any(k in last_txt for k in ("ACTIVE TRADE", "ACTIVE NOW", "ACTIVE SELLING", "ACTIVE BUYING"))
+        if not has_recent_lead:
+            is_active_now = False
 
     # Action (BUY vs SELL vs NONE for non-trades / non-directional updates)
     raw_action = (parsed.get("action") or "").upper().strip()
