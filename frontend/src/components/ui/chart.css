@@ -1,0 +1,181 @@
+/* shadcn/ui Chart design tokens & responsive styles tailored for AlphaSignal AI dark theme */
+
+.shadcn-chart-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 200px;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+}
+
+.shadcn-chart-container .recharts-responsive-container {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0;
+}
+
+.shadcn-chart-container .recharts-cartesian-axis-tick text {
+  fill: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.shadcn-chart-container .recharts-cartesian-grid line[stroke='#ccc'] {
+  stroke: rgba(255, 255, 255, 0.06);
+}
+
+.shadcn-chart-container .recharts-curve.recharts-tooltip-cursor {
+  stroke: rgba(148, 163, 184, 0.35);
+}
+
+.shadcn-chart-container .recharts-rectangle.recharts-tooltip-cursor {
+  fill: rgba(255, 255, 255, 0.04);
+}
+
+.shadcn-chart-container .recharts-dot[stroke='#fff'] {
+  stroke: transparent;
+}
+
+.shadcn-chart-container .recharts-layer,
+.shadcn-chart-container .recharts-sector,
+.shadcn-chart-container .recharts-surface {
+  outline: none;
+}
+
+.shadcn-chart-tooltip {
+  display: grid;
+  min-width: 9rem;
+  align-items: start;
+  gap: 0.375rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: rgba(11, 16, 28, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.shadcn-chart-tooltip-label {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 0.74rem;
+  margin-bottom: 1px;
+}
+
+.shadcn-chart-tooltip-list {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.shadcn-chart-tooltip-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shadcn-chart-tooltip-item--align-start {
+  align-items: stretch;
+}
+
+.shadcn-chart-tooltip-indicator {
+  flex-shrink: 0;
+  border-radius: 2px;
+  background-color: var(--color-bg);
+  border-color: var(--color-border);
+}
+
+.shadcn-chart-tooltip-indicator--dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.shadcn-chart-tooltip-indicator--line {
+  width: 4px;
+  min-height: 12px;
+}
+
+.shadcn-chart-tooltip-indicator--dashed {
+  width: 0;
+  border-left: 2px dashed var(--color-border);
+  background-color: transparent;
+}
+
+.shadcn-chart-tooltip-row {
+  display: flex;
+  flex: 1;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.85rem;
+  line-height: 1.2;
+}
+
+.shadcn-chart-tooltip-row--nested {
+  align-items: flex-end;
+}
+
+.shadcn-chart-tooltip-name {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.shadcn-chart-tooltip-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.shadcn-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem 1.15rem;
+  font-size: 0.73rem;
+  color: var(--text-secondary);
+}
+
+.shadcn-chart-legend--top {
+  padding-bottom: 0.55rem;
+}
+
+.shadcn-chart-legend--bottom {
+  padding-top: 0.45rem;
+}
+
+.shadcn-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  white-space: nowrap;
+}
+
+.shadcn-chart-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 680px) {
+  .chart-card {
+    padding: 1rem;
+  }
+
+  .chart-box {
+    height: 220px;
+  }
+
+  .shadcn-chart-legend {
+    gap: 0.4rem 0.75rem;
+    font-size: 0.68rem;
+  }
+}

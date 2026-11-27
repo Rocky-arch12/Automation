@@ -4,19 +4,78 @@ import {
   Activity,
   BarChart3,
   Cpu,
-  PieChart,
+  PieChart as PieChartIcon,
   Radio,
   RefreshCw,
   ShieldCheck,
   TrendingUp,
   Zap,
 } from 'lucide-react';
-import { AnalyticsChart } from '../components/common/AnalyticsChart';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Label,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import CountUp from '../components/reactbits/CountUp/CountUp';
 import SpotlightCard from '../components/reactbits/SpotlightCard/SpotlightCard';
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '../components/ui/chart';
 import { useAlphaSignal } from '../context/AlphaSignalContext';
 import { isValidTradeSignal } from '../utils/badgeUtils';
 import { formatLocalTime } from '../utils/dateUtils';
+
+const ACTIVITY_CHART_CONFIG = {
+  signals: {
+    label: 'Valid Signals',
+    color: '#10b981',
+  },
+  chatter: {
+    label: 'Chatter Filtered',
+    color: '#8b5cf6',
+  },
+};
+
+const BUYSELL_CHART_CONFIG = {
+  count: { label: 'Signals' },
+  buy: { label: 'BUY Signals', color: '#10b981' },
+  sell: { label: 'SELL Signals', color: '#ef4444' },
+  updates: { label: 'Updates / Exits', color: '#8b5cf6' },
+};
+
+const ASSETS_CHART_CONFIG = {
+  count: {
+    label: 'Monitored Signals',
+    color: '#3b82f6',
+  },
+};
+
+const LATENCY_CHART_CONFIG = {
+  latency: {
+    label: 'AI Latency',
+    color: '#38bdf8',
+  },
+};
+
+const ASSET_BAR_COLORS = [
+  '#f59e0b',
+  '#3b82f6',
+  '#10b981',
+  '#8b5cf6',
+  '#06b6d4',
+];
 
 export default function OverviewPage() {
   const {
@@ -38,42 +97,23 @@ export default function OverviewPage() {
     [chartMessages]
   );
 
-  // Chart 1: Signal Activity Over Time
-  const activityChartData = useMemo(() => {
+  // Chart 1: Signal Activity Over Time (AreaChart)
+  const activityData = useMemo(() => {
     if (!chartMessages.length) {
-      return {
-        labels: ['-6h', '-5h', '-4h', '-3h', '-2h', '-1h', 'Now'],
-        datasets: [
-          {
-            label: 'Valid Signals',
-            data: [2, 5, 4, 8, 12, 18, 24],
-            borderColor: '#10b981',
-            backgroundColor: 'rgba(16, 185, 129, 0.08)',
-            borderWidth: 2.5,
-            fill: true,
-            tension: 0.35,
-            pointBackgroundColor: '#10b981',
-            pointRadius: 3,
-          },
-          {
-            label: 'Chatter Filtered',
-            data: [8, 14, 10, 15, 22, 19, 28],
-            borderColor: '#8b5cf6',
-            backgroundColor: 'transparent',
-            borderWidth: 1.8,
-            borderDash: [4, 4],
-            tension: 0.35,
-            pointRadius: 0,
-          },
-        ],
-      };
+      return [
+        { bucket: '-6h', signals: 2, chatter: 8 },
+        { bucket: '-5h', signals: 5, chatter: 14 },
+        { bucket: '-4h', signals: 4, chatter: 10 },
+        { bucket: '-3h', signals: 8, chatter: 15 },
+        { bucket: '-2h', signals: 12, chatter: 22 },
+        { bucket: '-1h', signals: 18, chatter: 19 },
+        { bucket: 'Now', signals: 24, chatter: 28 },
+      ];
     }
 
     const buckets = 7;
     const chunkSize = Math.max(1, Math.floor(chartMessages.length / buckets));
-    const signalCounts = [];
-    const chatterCounts = [];
-    const labels = [];
+    const rows = [];
 
     for (let i = 0; i < buckets; i += 1) {
       const slice = chartMessages.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -83,54 +123,13 @@ export default function OverviewPage() {
         if (m.intent === 'CHATTER' || m.intent === 'OTHERS') chat += 1;
         else sigs += 1;
       });
-      signalCounts.push(sigs);
-      chatterCounts.push(chat);
-      labels.push(`P${i + 1}`);
+      rows.push({ bucket: `P${i + 1}`, signals: sigs, chatter: chat });
     }
-
-    return {
-      labels,
-      datasets: [
-        {
-          label: 'Valid Signals',
-          data: signalCounts,
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.08)',
-          borderWidth: 2.5,
-          fill: true,
-          tension: 0.35,
-          pointBackgroundColor: '#10b981',
-          pointRadius: 3,
-        },
-        {
-          label: 'Chatter Filtered',
-          data: chatterCounts,
-          borderColor: '#8b5cf6',
-          backgroundColor: 'transparent',
-          borderWidth: 1.8,
-          borderDash: [4, 4],
-          tension: 0.35,
-          pointRadius: 0,
-        },
-      ],
-    };
+    return rows;
   }, [chartMessages]);
 
-  const activityChartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { position: 'top' } },
-      scales: {
-        x: { grid: { color: 'rgba(255, 255, 255, 0.04)' } },
-        y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, beginAtZero: true },
-      },
-    }),
-    []
-  );
-
-  // Chart 2: Buy vs Sell Direction
-  const buySellChartData = useMemo(() => {
+  // Chart 2: Buy vs Sell Direction (Donut PieChart)
+  const buySellData = useMemo(() => {
     let buyCount = 0;
     let sellCount = 0;
     let updateCount = 0;
@@ -139,36 +138,26 @@ export default function OverviewPage() {
       const act = (m.action || '').toUpperCase();
       if (act.includes('BUY') || act === 'LONG') buyCount += 1;
       else if (act.includes('SELL') || act === 'SHORT') sellCount += 1;
-      else if (m.intent === 'TRADE_UPDATE' || act.includes('PARTIAL') || act.includes('MODIFY'))
+      else if (m.intent === 'TRADE_UPDATE' || act.includes('PARTIAL') || act.includes('MODIFY')) {
         updateCount += 1;
+      }
     });
 
-    const data = buyCount > 0 || sellCount > 0 ? [buyCount, sellCount, updateCount] : [65, 25, 10];
-    return {
-      labels: ['BUY Signals', 'SELL Signals', 'Updates / Exits'],
-      datasets: [
-        {
-          data,
-          backgroundColor: ['#10b981', '#ef4444', '#8b5cf6'],
-          borderWidth: 0,
-          hoverOffset: 6,
-        },
-      ],
-    };
+    const hasData = buyCount > 0 || sellCount > 0;
+    return [
+      { key: 'buy', label: 'BUY Signals', count: hasData ? buyCount : 65, fill: '#10b981' },
+      { key: 'sell', label: 'SELL Signals', count: hasData ? sellCount : 25, fill: '#ef4444' },
+      { key: 'updates', label: 'Updates / Exits', count: hasData ? updateCount : 10, fill: '#8b5cf6' },
+    ];
   }, [chartMessages]);
 
-  const buySellChartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: '70%',
-      plugins: { legend: { position: 'bottom' } },
-    }),
-    []
+  const totalDirectionCount = useMemo(
+    () => buySellData.reduce((sum, item) => sum + item.count, 0),
+    [buySellData]
   );
 
-  // Chart 3: Asset Distribution
-  const assetsChartData = useMemo(() => {
+  // Chart 3: Asset Distribution (BarChart)
+  const assetsData = useMemo(() => {
     const symbolMap = {};
     chartMessages.forEach((m) => {
       if (m.symbol && m.intent !== 'CHATTER' && m.intent !== 'OTHERS') {
@@ -179,83 +168,40 @@ export default function OverviewPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
 
-    const labels = sorted.length > 0 ? sorted.map((s) => s[0]) : ['XAUUSD', 'BTCUSD', 'GBPUSD', 'EURUSD', 'ETHUSD'];
-    const data = sorted.length > 0 ? sorted.map((s) => s[1]) : [49, 12, 6, 4, 3];
+    if (sorted.length > 0) {
+      return sorted.map(([symbol, count], idx) => ({
+        symbol,
+        count,
+        fill: ASSET_BAR_COLORS[idx % ASSET_BAR_COLORS.length],
+      }));
+    }
 
-    return {
-      labels,
-      datasets: [
-        {
-          label: 'Monitored Signals',
-          data,
-          backgroundColor: [
-            'rgba(245, 158, 11, 0.8)',
-            'rgba(59, 130, 246, 0.8)',
-            'rgba(16, 185, 129, 0.8)',
-            'rgba(139, 92, 246, 0.8)',
-            'rgba(6, 182, 212, 0.8)',
-          ],
-          borderRadius: 6,
-          borderSkipped: false,
-        },
-      ],
-    };
+    return [
+      { symbol: 'XAUUSD', count: 49, fill: ASSET_BAR_COLORS[0] },
+      { symbol: 'BTCUSD', count: 12, fill: ASSET_BAR_COLORS[1] },
+      { symbol: 'GBPUSD', count: 6, fill: ASSET_BAR_COLORS[2] },
+      { symbol: 'EURUSD', count: 4, fill: ASSET_BAR_COLORS[3] },
+      { symbol: 'ETHUSD', count: 3, fill: ASSET_BAR_COLORS[4] },
+    ];
   }, [chartMessages]);
 
-  const assetsChartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { display: false } },
-        y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, beginAtZero: true },
-      },
-    }),
-    []
-  );
-
-  // Chart 4: AI Latency Performance
-  const performanceChartData = useMemo(() => {
+  // Chart 4: AI Latency Performance (AreaChart)
+  const performanceData = useMemo(() => {
     const recent = chartMessages.slice(0, 15).reverse();
-    const labels =
-      recent.length > 0
-        ? recent.map((_, idx) => `#${idx + 1}`)
-        : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'];
-    const data =
-      recent.length > 0
-        ? recent.map((m) => m.processing_time_ms || 210)
-        : [180, 240, 195, 310, 210, 190, 260, 220, 205, 195, 280, 215, 190, 200, 210];
+    if (recent.length > 0) {
+      return recent.map((m, idx) => ({
+        sample: `#${idx + 1}`,
+        latency: m.processing_time_ms || 210,
+      }));
+    }
 
-    return {
-      labels,
-      datasets: [
-        {
-          label: 'AI Processing Time (ms)',
-          data,
-          borderColor: '#38bdf8',
-          backgroundColor: 'rgba(56, 189, 248, 0.08)',
-          borderWidth: 2,
-          fill: true,
-          tension: 0.3,
-          pointRadius: 2,
-        },
-      ],
-    };
+    return [180, 240, 195, 310, 210, 190, 260, 220, 205, 195, 280, 215, 190, 200, 210].map(
+      (latency, idx) => ({
+        sample: `#${idx + 1}`,
+        latency,
+      })
+    );
   }, [chartMessages]);
-
-  const performanceChartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { display: false } },
-        y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, beginAtZero: false },
-      },
-    }),
-    []
-  );
 
   const aiBadgeLabel = useMemo(() => {
     const ai = systemStatus?.ai;
@@ -363,8 +309,9 @@ export default function OverviewPage() {
         </SpotlightCard>
       </section>
 
-      {/* 4 Interactive Charts Grid */}
+      {/* 4 Responsive shadcn/ui Charts (Recharts) */}
       <section className="dashboard-charts-grid">
+        {/* Chart 1: Signal Activity Over Time */}
         <div className="chart-card">
           <div className="chart-card-header">
             <div className="chart-card-title">
@@ -373,34 +320,127 @@ export default function OverviewPage() {
             </div>
             <span className="chart-card-badge">Real-Time</span>
           </div>
-          <div className="chart-box">
-            <AnalyticsChart
-              id="chart-activity"
-              type="line"
-              data={activityChartData}
-              options={activityChartOptions}
-            />
+          <div className="chart-box" id="chart-activity">
+            <ChartContainer id="activity" config={ACTIVITY_CHART_CONFIG}>
+              <AreaChart data={activityData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="fillValidSignals" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-signals)" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="var(--color-signals)" stopOpacity={0.02} />
+                  </linearGradient>
+                  <linearGradient id="fillChatterFiltered" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-chatter)" stopOpacity={0.22} />
+                    <stop offset="95%" stopColor="var(--color-chatter)" stopOpacity={0.01} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="bucket"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  width={36}
+                />
+                <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+                <ChartLegend content={<ChartLegendContent />} verticalAlign="top" />
+                <Area
+                  dataKey="chatter"
+                  type="monotone"
+                  fill="url(#fillChatterFiltered)"
+                  stroke="var(--color-chatter)"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                />
+                <Area
+                  dataKey="signals"
+                  type="monotone"
+                  fill="url(#fillValidSignals)"
+                  stroke="var(--color-signals)"
+                  strokeWidth={2.5}
+                />
+              </AreaChart>
+            </ChartContainer>
           </div>
         </div>
 
+        {/* Chart 2: Buy vs Sell Direction */}
         <div className="chart-card">
           <div className="chart-card-header">
             <div className="chart-card-title">
-              <PieChart size={16} style={{ color: 'var(--success-text)' }} />
+              <PieChartIcon size={16} style={{ color: 'var(--success-text)' }} />
               Buy vs Sell Direction
             </div>
             <span className="chart-card-badge">Intent Ratio</span>
           </div>
-          <div className="chart-box">
-            <AnalyticsChart
-              id="chart-buysell"
-              type="doughnut"
-              data={buySellChartData}
-              options={buySellChartOptions}
-            />
+          <div className="chart-box" id="chart-buysell">
+            <ChartContainer id="buysell" config={BUYSELL_CHART_CONFIG}>
+              <PieChart>
+                <ChartTooltip content={<ChartTooltipContent hideLabel indicator="dot" />} />
+                <ChartLegend content={<ChartLegendContent nameKey="key" />} />
+                <Pie
+                  data={buySellData}
+                  dataKey="count"
+                  nameKey="key"
+                  innerRadius="58%"
+                  outerRadius="84%"
+                  paddingAngle={3}
+                  cornerRadius={4}
+                  strokeWidth={0}
+                >
+                  {buySellData.map((entry) => (
+                    <Cell key={entry.key} fill={entry.fill} />
+                  ))}
+                  <Label
+                    content={({ viewBox }) => {
+                      if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
+                        return (
+                          <text
+                            x={viewBox.cx}
+                            y={viewBox.cy}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            <tspan
+                              x={viewBox.cx}
+                              y={viewBox.cy - 4}
+                              style={{
+                                fill: '#f8fafc',
+                                fontSize: '1.35rem',
+                                fontWeight: 800,
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {totalDirectionCount}
+                            </tspan>
+                            <tspan
+                              x={viewBox.cx}
+                              y={viewBox.cy + 16}
+                              style={{
+                                fill: '#94a3b8',
+                                fontSize: '0.68rem',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Signals
+                            </tspan>
+                          </text>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                </Pie>
+              </PieChart>
+            </ChartContainer>
           </div>
         </div>
 
+        {/* Chart 3: Asset Distribution */}
         <div className="chart-card">
           <div className="chart-card-header">
             <div className="chart-card-title">
@@ -409,16 +449,35 @@ export default function OverviewPage() {
             </div>
             <span className="chart-card-badge">Symbol Frequencies</span>
           </div>
-          <div className="chart-box">
-            <AnalyticsChart
-              id="chart-assets"
-              type="bar"
-              data={assetsChartData}
-              options={assetsChartOptions}
-            />
+          <div className="chart-box" id="chart-assets">
+            <ChartContainer id="assets" config={ASSETS_CHART_CONFIG}>
+              <BarChart data={assetsData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="symbol"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  interval={0}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  width={36}
+                />
+                <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={44}>
+                  {assetsData.map((entry) => (
+                    <Cell key={entry.symbol} fill={entry.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
           </div>
         </div>
 
+        {/* Chart 4: AI Processing Latency (ms) */}
         <div className="chart-card">
           <div className="chart-card-header">
             <div className="chart-card-title">
@@ -429,13 +488,38 @@ export default function OverviewPage() {
               {aiBadgeLabel}
             </span>
           </div>
-          <div className="chart-box">
-            <AnalyticsChart
-              id="chart-performance"
-              type="line"
-              data={performanceChartData}
-              options={performanceChartOptions}
-            />
+          <div className="chart-box" id="chart-performance">
+            <ChartContainer id="performance" config={LATENCY_CHART_CONFIG}>
+              <AreaChart data={performanceData} margin={{ top: 10, right: 8, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="fillAiLatency" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-latency)" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="var(--color-latency)" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="sample"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  interval="preserveStartEnd"
+                />
+                <YAxis tickLine={false} axisLine={false} width={44} />
+                <ChartTooltip
+                  content={<ChartTooltipContent indicator="line" valueSuffix=" ms" />}
+                />
+                <Area
+                  dataKey="latency"
+                  type="monotone"
+                  fill="url(#fillAiLatency)"
+                  stroke="var(--color-latency)"
+                  strokeWidth={2.2}
+                  dot={{ r: 2.5, fill: 'var(--color-latency)' }}
+                  activeDot={{ r: 4.5 }}
+                />
+              </AreaChart>
+            </ChartContainer>
           </div>
         </div>
       </section>

@@ -6,7 +6,7 @@ Modern React migration of the AlphaSignal AI frontend (`static/`), preserving 10
 - **React 19 + Vite**
 - **React Router DOM** (clean path routes + legacy `#hash` compatibility)
 - **React Bits (`reactbits.dev`)**: `SpotlightCard`, `CountUp`, `BlurText`, `ShinyText`, `ClickSpark`, `Particles`
-- **Lucide React** & **Chart.js**
+- **shadcn/ui Charts (Recharts)** & **Lucide React**
 
 ## Local Development
 
