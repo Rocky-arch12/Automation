@@ -637,6 +637,14 @@ async def get_xm_open_positions():
         "mode": "LIVE_MT5" if (xm_executor.is_connected and not xm_executor.is_mock_mode) else "DEMO_SANDBOX"
     }
 
+@app.get("/api/xm/analytics")
+async def get_xm_analytics_endpoint(
+    days: int = Query(30, ge=0, le=3650),
+    tz_offset_minutes: int = Query(0, ge=-840, le=840),
+):
+    """Returns day-wise XM MT5 metrics, realized PnL, equity curve, symbol attribution, and risk ratios."""
+    return await xm_executor.get_xm_analytics(days=days, tz_offset_minutes=tz_offset_minutes)
+
 class ClosePositionRequest(BaseModel):
     ticket: int
     lots: Optional[float] = None

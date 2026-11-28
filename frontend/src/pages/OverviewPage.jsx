@@ -33,6 +33,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from '../components/ui/chart';
+import { XmAnalyticsSection } from '../components/dashboard/XmAnalyticsSection';
 import { useAlphaSignal } from '../context/AlphaSignalContext';
 import { isValidTradeSignal } from '../utils/badgeUtils';
 import { formatLocalTime } from '../utils/dateUtils';
@@ -77,6 +78,13 @@ const ASSET_BAR_COLORS = [
   '#06b6d4',
 ];
 
+const XM_RANGE_OPTIONS = [
+  { key: '7d', label: '7D' },
+  { key: '14d', label: '14D' },
+  { key: '30d', label: '30D' },
+  { key: 'all', label: 'ALL' },
+];
+
 export default function OverviewPage() {
   const {
     stats,
@@ -84,9 +92,14 @@ export default function OverviewPage() {
     unfilteredMessages,
     systemStatus,
     xmPositionsData,
+    xmAnalytics,
+    xmAnalyticsRange,
+    setXmAnalyticsRange,
+    xmAnalyticsLoaded,
     loadStats,
     loadMessages,
     loadXmPositions,
+    loadXmAnalytics,
   } = useAlphaSignal();
   const navigate = useNavigate();
 
@@ -215,6 +228,7 @@ export default function OverviewPage() {
     loadStats();
     loadMessages();
     loadXmPositions();
+    loadXmAnalytics();
   };
 
   return (
@@ -223,10 +237,22 @@ export default function OverviewPage() {
         <div>
           <h2 className="page-header-title">Trading Intelligence Overview</h2>
           <p className="page-header-desc">
-            Real-time telemetry, AI decision accuracy, signal distribution, and broker metrics
+            Real-time telemetry, XM day-wise PnL &amp; broker metrics, AI decision accuracy, and signal distribution
           </p>
         </div>
         <div className="page-header-actions">
+          <div className="filter-group" role="group" aria-label="XM Analytics timeframe">
+            {XM_RANGE_OPTIONS.map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                className={`filter-btn${xmAnalyticsRange === opt.key ? ' active' : ''}`}
+                onClick={() => setXmAnalyticsRange(opt.key)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -308,6 +334,13 @@ export default function OverviewPage() {
           </div>
         </SpotlightCard>
       </section>
+
+      <XmAnalyticsSection
+        xmAnalytics={xmAnalytics}
+        xmAnalyticsLoaded={xmAnalyticsLoaded}
+        xmAnalyticsRange={xmAnalyticsRange}
+        onNavigatePositions={() => navigate('/positions')}
+      />
 
       {/* 4 Responsive shadcn/ui Charts (Recharts) */}
       <section className="dashboard-charts-grid">

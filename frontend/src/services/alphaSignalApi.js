@@ -73,6 +73,18 @@ export async function fetchXmPositions() {
   return res.json();
 }
 
+export async function fetchXmAnalytics({ days = 30, tzOffsetMinutes } = {}) {
+  const tz =
+    typeof tzOffsetMinutes === 'number'
+      ? tzOffsetMinutes
+      : -new Date().getTimezoneOffset();
+  const res = await apiFetch(
+    `/api/xm/analytics?days=${encodeURIComponent(days)}&tz_offset_minutes=${encodeURIComponent(tz)}`
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export async function closeXmPosition({ ticket, lots }) {
   const res = await apiFetch('/api/xm/close', {
     method: 'POST',

@@ -12,6 +12,7 @@ import {
   fetchMessages,
   fetchSystemStatus,
   fetchTrades,
+  fetchXmAnalytics,
   fetchXmPositions,
   fetchXmStatus,
   resetAllData,
@@ -50,6 +51,9 @@ export function AlphaSignalProvider({ children }) {
     account: null,
     mode: 'DEMO_SANDBOX',
   });
+  const [xmAnalyticsRange, setXmAnalyticsRange] = useState('30d');
+  const [xmAnalytics, setXmAnalytics] = useState(null);
+  const [xmAnalyticsLoaded, setXmAnalyticsLoaded] = useState(false);
 
   // Filters
   const [messageFilter, setMessageFilter] = useState('ALL');
@@ -81,12 +85,12 @@ export function AlphaSignalProvider({ children }) {
   const [selectedJsonData, setSelectedJsonData] = useState(null);
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
 
-  const filterRefs = useRef({ messageFilter, messageSearch, tradeFilter });
+  const filterRefs = useRef({ messageFilter, messageSearch, tradeFilter, xmAnalyticsRange });
   const connectWebSocketRef = useRef(null);
 
   useEffect(() => {
-    filterRefs.current = { messageFilter, messageSearch, tradeFilter };
-  }, [messageFilter, messageSearch, tradeFilter]);
+    filterRefs.current = { messageFilter, messageSearch, tradeFilter, xmAnalyticsRange };
+  }, [messageFilter, messageSearch, tradeFilter, xmAnalyticsRange]);
 
   const appendLog = useCallback((level, _category, message) => {
     setLogs((prev) => [
@@ -168,6 +172,20 @@ export function AlphaSignalProvider({ children }) {
     }
   }, []);
 
+  const loadXmAnalytics = useCallback(async (overrideRange) => {
+    const rangeKey = overrideRange ?? filterRefs.current.xmAnalyticsRange ?? '30d';
+    const daysMap = { '7d': 7, '14d': 14, '30d': 30, all: 0 };
+    const days = daysMap[rangeKey] ?? 30;
+    try {
+      const data = await fetchXmAnalytics({ days });
+      setXmAnalytics(data);
+      setXmAnalyticsLoaded(true);
+    } catch (e) {
+      console.error('Failed to load XM analytics:', e);
+      setXmAnalyticsLoaded(true);
+    }
+  }, []);
+
   const loadLogs = useCallback(async () => {
     try {
       const data = await fetchLogs(40);
@@ -220,12 +238,12 @@ export function AlphaSignalProvider({ children }) {
       await resetAllData();
       setMessages([]);
       setUnfilteredMessages([]);
-      await Promise.all([loadStats(), loadLogs(), loadTrades(), loadXmPositions()]);
+      await Promise.all([loadStats(), loadLogs(), loadTrades(), loadXmPositions(), loadXmAnalytics()]);
       showToast('All message logs, trades, and history wiped clean.', 'info');
     } catch (e) {
       showToast('Failed to clear data: ' + e.message, 'error');
     }
-  }, [loadLogs, loadStats, loadTrades, loadXmPositions, showToast]);
+  }, [loadLogs, loadStats, loadTrades, loadXmAnalytics, loadXmPositions, showToast]);
 
   const disconnectWebSocket = useCallback(() => {
     clearTimeout(reconnectTimerRef.current);
@@ -310,6 +328,7 @@ export function AlphaSignalProvider({ children }) {
           loadStats();
           loadTrades();
           loadXmPositions();
+          loadXmAnalytics();
         } else if (
           msg.type === 'TRADE_UPDATED' ||
           msg.type === 'TRADES_EXPIRED' ||
@@ -319,6 +338,7 @@ export function AlphaSignalProvider({ children }) {
         ) {
           loadTrades();
           loadXmPositions();
+          loadXmAnalytics();
           loadMessages();
           loadStats();
         } else if (msg.type === 'SYSTEM_STATUS') {
@@ -354,7 +374,7 @@ export function AlphaSignalProvider({ children }) {
       setWsConnected(false);
       setWsStatusText('Live: Offline');
     };
-  }, [appendLog, disconnectWebSocket, loadMessages, loadStats, loadTrades, loadXmPositions]);
+  }, [appendLog, disconnectWebSocket, loadMessages, loadStats, loadTrades, loadXmAnalytics, loadXmPositions]);
 
   useEffect(() => {
     connectWebSocketRef.current = connectWebSocket;
@@ -381,9 +401,14 @@ export function AlphaSignalProvider({ children }) {
     };
     initDashboard();
 
+    let pollTick = 0;
     const pollInterval = setInterval(() => {
+      pollTick += 1;
       loadStats();
       loadXmPositions();
+      if (pollTick % 3 === 0) {
+        loadXmAnalytics();
+      }
     }, 5000);
 
     return () => {
@@ -398,8 +423,18 @@ export function AlphaSignalProvider({ children }) {
     loadLogs,
     loadStats,
     loadSystemStatus,
+    loadXmAnalytics,
     loadXmPositions,
   ]);
+
+  // Refetch XM analytics when range filter changes while mounted
+  useEffect(() => {
+    if (!dashboardMounted) return;
+    const t = setTimeout(() => {
+      loadXmAnalytics(xmAnalyticsRange);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [dashboardMounted, xmAnalyticsRange, loadXmAnalytics]);
 
   // Refetch messages when intent filter or debounced search changes while mounted
   useEffect(() => {
@@ -432,6 +467,10 @@ export function AlphaSignalProvider({ children }) {
         trades,
         tradesLoaded,
         xmPositionsData,
+        xmAnalytics,
+        xmAnalyticsRange,
+        setXmAnalyticsRange,
+        xmAnalyticsLoaded,
         logs,
         wsConnected,
         wsStatusText,
@@ -458,6 +497,7 @@ export function AlphaSignalProvider({ children }) {
         loadMessages,
         loadTrades,
         loadXmPositions,
+        loadXmAnalytics,
         loadLogs,
         appendLog,
         clearTerminalLogs,

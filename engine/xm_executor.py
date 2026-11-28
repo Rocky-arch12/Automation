@@ -1,8 +1,10 @@
 import os
 import re
 import json
+import time
 import asyncio
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Tuple, List
 from database import log_event, get_db, update_trade_outcome
 
@@ -1292,5 +1294,730 @@ class XMExecutionEngine:
                 await conn.commit()
         except Exception as e:
             print(f"[DB RECORD EXECUTION ERROR] {e}")
+
+    @staticmethod
+    def _field(obj: Any, name: str, default: Any = None) -> Any:
+        """Reads an attribute from an MT5 tuple/object or dict safely."""
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    def _detect_server_utc_offset_sec(self) -> int:
+        """
+        Detects XM MT5 server clock offset vs UTC (typically +7200s EET / +10800s EEST)
+        using live 24/7 crypto ticks, defaulting to +7200s if unavailable.
+        """
+        if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
+            now_utc = time.time()
+            for sym in ("BTCUSD", "BTCUSDm", "BTCUSDT", "ETHUSD", "GOLD", "XAUUSD"):
+                try:
+                    tick = mt5.symbol_info_tick(sym)
+                    if tick and getattr(tick, "time", 0):
+                        diff = float(tick.time) - now_utc
+                        if abs(diff) <= 43200:
+                            return int(round(diff / 1800.0) * 1800)
+                except Exception:
+                    continue
+        return 7200
+
+    def _compute_xm_analytics_from_records(
+        self,
+        account: Dict[str, Any],
+        open_positions: List[Any],
+        deals: List[Any],
+        days: int = 30,
+        tz_offset_minutes: int = 0,
+        server_offset_sec: int = 7200,
+        mode: str = "LIVE_MT5",
+        source: str = "XM_MT5_TERMINAL",
+    ) -> Dict[str, Any]:
+        """Computes day-wise PnL, balance curve, symbol attribution, and risk metrics from XM records."""
+        client_offset_sec = max(-840, min(840, int(tz_offset_minutes or 0))) * 60
+        now_utc = time.time()
+        today_dt = datetime.fromtimestamp(now_utc + client_offset_sec, tz=timezone.utc)
+        today_key = today_dt.strftime("%Y-%m-%d")
+        cutoff_key = (
+            (today_dt - timedelta(days=int(days))).strftime("%Y-%m-%d")
+            if days and int(days) > 0
+            else None
+        )
+
+        def _to_local_dt(raw_ts: Any) -> Tuple[int, datetime, str]:
+            utc_ts = int(raw_ts or 0) - int(server_offset_sec)
+            local_dt = datetime.fromtimestamp(utc_ts + client_offset_sec, tz=timezone.utc)
+            return utc_ts, local_dt, local_dt.strftime("%Y-%m-%d")
+
+        def _format_day_label(day_str: str) -> str:
+            try:
+                return datetime.strptime(day_str, "%Y-%m-%d").strftime("%b %d")
+            except Exception:
+                return day_str
+
+        open_ticket_ids = {
+            int(self._field(p, "ticket", 0) or 0)
+            for p in (open_positions or [])
+            if self._field(p, "ticket", None) is not None
+        }
+        open_floating_pnl = round(
+            sum(float(self._field(p, "profit", 0.0) or 0.0) for p in (open_positions or [])), 2
+        )
+        open_volume_lots = round(
+            sum(float(self._field(p, "volume", 0.0) or 0.0) for p in (open_positions or [])), 2
+        )
+
+        sorted_deals = sorted(
+            deals or [],
+            key=lambda d: (int(self._field(d, "time", 0) or 0), int(self._field(d, "ticket", 0) or 0)),
+        )
+
+        # 1. Accumulate chronological daily cashflows and trading deal ledger
+        daily_raw: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "realized_pnl": 0.0,
+                "commission_swap": 0.0,
+                "deposits": 0.0,
+                "deals_count": 0,
+                "volume_lots": 0.0,
+                "partial_1to1_hits": 0,
+                "symbols": set(),
+                "closed_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "breakeven": 0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "trade_pnls": [],
+            }
+        )
+        positions_map: Dict[int, List[Any]] = defaultdict(list)
+        all_time_deposits = 0.0
+        all_time_realized_pnl = 0.0
+        deal_cashflows: List[Tuple[str, float]] = []
+
+        for d in sorted_deals:
+            d_type = int(self._field(d, "type", 0) or 0)
+            d_entry = int(self._field(d, "entry", 0) or 0)
+            d_profit = float(self._field(d, "profit", 0.0) or 0.0)
+            d_comm = float(self._field(d, "commission", 0.0) or 0.0)
+            d_swap = float(self._field(d, "swap", 0.0) or 0.0)
+            d_fee = float(self._field(d, "fee", 0.0) or 0.0)
+            d_vol = float(self._field(d, "volume", 0.0) or 0.0)
+            d_sym = str(self._field(d, "symbol", "") or "")
+            d_comment = str(self._field(d, "comment", "") or "")
+            d_pid = int(self._field(d, "position_id", 0) or 0)
+            d_time = int(self._field(d, "time", 0) or 0)
+
+            _, _, day_key = _to_local_dt(d_time)
+
+            if d_type == 2:  # DEAL_TYPE_BALANCE (deposits / withdrawals / custom balance)
+                all_time_deposits += d_profit
+                daily_raw[day_key]["deposits"] += d_profit
+                continue
+
+            if d_type not in (0, 1):
+                # Broker non-trade adjustment/interest/daily commission
+                net_adj = d_profit + d_comm + d_swap + d_fee
+                all_time_realized_pnl += net_adj
+                daily_raw[day_key]["realized_pnl"] += net_adj
+                daily_raw[day_key]["commission_swap"] += d_comm + d_swap + d_fee
+                deal_cashflows.append((day_key, net_adj))
+                continue
+
+            if d_pid:
+                positions_map[d_pid].append(d)
+
+            costs = d_comm + d_swap + d_fee
+            net_deal = (d_profit + costs) if d_entry in (1, 2, 3) else costs
+            all_time_realized_pnl += net_deal
+            deal_cashflows.append((day_key, net_deal))
+
+            row = daily_raw[day_key]
+            row["realized_pnl"] += net_deal
+            row["commission_swap"] += costs
+            row["deals_count"] += 1
+            if d_entry in (0, 2):
+                row["volume_lots"] += d_vol
+            if d_entry in (1, 2, 3) and "1:1" in d_comment:
+                row["partial_1to1_hits"] += 1
+            if d_sym:
+                row["symbols"].add(d_sym)
+
+        # 2. Group closed positions for trade-level metrics (win rate, PF, streaks, symbol attribution)
+        closed_positions: List[Dict[str, Any]] = []
+        for pid, pdeals in positions_map.items():
+            if pid in open_ticket_ids:
+                continue
+            pdeals_s = sorted(
+                pdeals,
+                key=lambda x: (int(self._field(x, "time", 0) or 0), int(self._field(x, "ticket", 0) or 0)),
+            )
+            out_deals = [x for x in pdeals_s if int(self._field(x, "entry", 0) or 0) in (1, 2, 3)]
+            if not out_deals:
+                continue
+
+            in_deals = [x for x in pdeals_s if int(self._field(x, "entry", 0) or 0) in (0, 2)]
+            first_d = in_deals[0] if in_deals else pdeals_s[0]
+            last_d = out_deals[-1]
+
+            net_pnl = sum(
+                float(self._field(x, "profit", 0.0) or 0.0)
+                + float(self._field(x, "commission", 0.0) or 0.0)
+                + float(self._field(x, "swap", 0.0) or 0.0)
+                + float(self._field(x, "fee", 0.0) or 0.0)
+                for x in pdeals_s
+            )
+            in_vol = sum(float(self._field(x, "volume", 0.0) or 0.0) for x in in_deals)
+            if in_vol <= 0:
+                in_vol = sum(float(self._field(x, "volume", 0.0) or 0.0) for x in out_deals)
+
+            # Volume-weighted open and close price
+            open_price = float(self._field(first_d, "price", 0.0) or 0.0)
+            out_vol_sum = sum(float(self._field(x, "volume", 0.0) or 0.0) for x in out_deals)
+            if out_vol_sum > 0:
+                close_price = sum(
+                    float(self._field(x, "price", 0.0) or 0.0) * float(self._field(x, "volume", 0.0) or 0.0)
+                    for x in out_deals
+                ) / out_vol_sum
+            else:
+                close_price = float(self._field(last_d, "price", 0.0) or 0.0)
+
+            had_1to1 = any("1:1" in str(self._field(x, "comment", "") or "") for x in pdeals_s)
+            last_comment = str(self._field(last_d, "comment", "") or "")
+            lc_lower = last_comment.lower()
+            if "[tp" in lc_lower:
+                close_reason = "TP Hit"
+            elif "[sl" in lc_lower:
+                close_reason = "1:1 CTC" if (had_1to1 and net_pnl >= -0.05) else "SL Hit"
+            elif "manual close" in lc_lower:
+                close_reason = "Manual Close"
+            elif "1:1" in lc_lower:
+                close_reason = "1:1 Exit"
+            else:
+                close_reason = "Closed"
+
+            close_utc_ts, _, close_day = _to_local_dt(self._field(last_d, "time", 0))
+            side = "BUY" if int(self._field(first_d, "type", 0) or 0) == 0 else "SELL"
+            sym = str(self._field(first_d, "symbol", "") or self._field(last_d, "symbol", "") or "UNKNOWN")
+
+            closed_positions.append(
+                {
+                    "ticket": pid,
+                    "symbol": sym,
+                    "side": side,
+                    "volume": round(in_vol, 2),
+                    "open_price": round(open_price, 5),
+                    "close_price": round(close_price, 5),
+                    "net_pnl": round(net_pnl, 2),
+                    "had_1to1": had_1to1,
+                    "close_reason": close_reason,
+                    "close_day": close_day,
+                    "close_ts": close_utc_ts,
+                    "closed_at": datetime.fromtimestamp(close_utc_ts, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                }
+            )
+
+            day_row = daily_raw[close_day]
+            day_row["closed_trades"] += 1
+            day_row["trade_pnls"].append(net_pnl)
+            if net_pnl > 0.005:
+                day_row["wins"] += 1
+                day_row["gross_profit"] += net_pnl
+            elif net_pnl < -0.005:
+                day_row["losses"] += 1
+                day_row["gross_loss"] += abs(net_pnl)
+            else:
+                day_row["breakeven"] += 1
+
+        closed_positions.sort(key=lambda x: (x["close_ts"], x["ticket"]))
+
+        # 3. Walk chronological days to compute exact ending_balance & cumulative_pnl
+        all_days_sorted = sorted(daily_raw.keys())
+        running_balance = 0.0
+        running_cum_pnl = 0.0
+        balance_before_range: Optional[float] = None
+        daily_metrics: List[Dict[str, Any]] = []
+
+        for day_key in all_days_sorted:
+            row = daily_raw[day_key]
+            start_bal = running_balance + row["deposits"]
+            if cutoff_key and day_key >= cutoff_key and balance_before_range is None:
+                balance_before_range = start_bal if start_bal > 0 else running_balance
+
+            day_pnl = round(row["realized_pnl"], 2)
+            running_balance = round(running_balance + row["deposits"] + row["realized_pnl"], 2)
+            running_cum_pnl = round(running_cum_pnl + row["realized_pnl"], 2)
+
+            # Skip pure deposit-only days with zero trading activity from trading ledger rows
+            has_trading = row["deals_count"] > 0 or row["closed_trades"] > 0
+            if not has_trading:
+                continue
+
+            if cutoff_key and day_key < cutoff_key:
+                continue
+
+            closed_cnt = row["closed_trades"]
+            wins_cnt = row["wins"]
+            losses_cnt = row["losses"]
+            be_cnt = row["breakeven"]
+            win_rate = round((wins_cnt / closed_cnt * 100.0), 1) if closed_cnt > 0 else 0.0
+            roi_pct = round((day_pnl / start_bal * 100.0), 2) if start_bal > 0 else 0.0
+            trade_pnls = row["trade_pnls"]
+            best_t = round(max(trade_pnls), 2) if trade_pnls else 0.0
+            worst_t = round(min(trade_pnls), 2) if trade_pnls else 0.0
+
+            daily_metrics.append(
+                {
+                    "date": day_key,
+                    "label": _format_day_label(day_key),
+                    "is_today": day_key == today_key,
+                    "realized_pnl": day_pnl,
+                    "cumulative_pnl": running_cum_pnl,
+                    "ending_balance": running_balance,
+                    "gross_profit": round(row["gross_profit"], 2),
+                    "gross_loss": round(row["gross_loss"], 2),
+                    "commission_swap": round(row["commission_swap"], 2),
+                    "closed_trades": closed_cnt,
+                    "wins": wins_cnt,
+                    "losses": losses_cnt,
+                    "breakeven": be_cnt,
+                    "win_rate": win_rate,
+                    "deals_count": row["deals_count"],
+                    "volume_lots": round(row["volume_lots"], 2),
+                    "partial_1to1_hits": row["partial_1to1_hits"],
+                    "best_trade": best_t,
+                    "worst_trade": worst_t,
+                    "roi_pct": roi_pct,
+                    "symbols": sorted(row["symbols"]),
+                }
+            )
+
+        if balance_before_range is None:
+            balance_before_range = all_time_deposits if all_time_deposits > 0 else float(account.get("balance", 0.0) or 0.0)
+
+        # Recompute range-scoped cumulative_pnl starting at 0 for clean range charting while preserving all-time total
+        range_cum = 0.0
+        for dm in daily_metrics:
+            range_cum = round(range_cum + dm["realized_pnl"], 2)
+            dm["range_cumulative_pnl"] = range_cum
+
+        # 4. Compute range-scoped summary metrics
+        range_closed = [
+            p for p in closed_positions if (not cutoff_key or p["close_day"] >= cutoff_key)
+        ]
+        range_realized_pnl = round(sum(dm["realized_pnl"] for dm in daily_metrics), 2)
+        range_volume = round(sum(dm["volume_lots"] for dm in daily_metrics), 2)
+        range_deals = sum(dm["deals_count"] for dm in daily_metrics)
+
+        pos_wins = [p for p in range_closed if p["net_pnl"] > 0.005]
+        pos_losses = [p for p in range_closed if p["net_pnl"] < -0.005]
+        pos_bes = [p for p in range_closed if abs(p["net_pnl"]) <= 0.005]
+
+        gross_profit = round(sum(p["net_pnl"] for p in pos_wins), 2)
+        gross_loss = round(sum(abs(p["net_pnl"]) for p in pos_losses), 2)
+        closed_count = len(range_closed)
+        win_rate = round((len(pos_wins) / closed_count * 100.0), 1) if closed_count > 0 else 0.0
+        profit_factor = (
+            round(gross_profit / gross_loss, 2)
+            if gross_loss > 0
+            else (None if gross_profit == 0 else 99.9)
+        )
+        avg_win = round(gross_profit / len(pos_wins), 2) if pos_wins else 0.0
+        avg_loss = round(gross_loss / len(pos_losses), 2) if pos_losses else 0.0
+        payoff_ratio = round(avg_win / avg_loss, 2) if avg_loss > 0 else (None if avg_win == 0 else 99.9)
+        expectancy = round(range_realized_pnl / closed_count, 2) if closed_count > 0 else 0.0
+        best_trade = round(max((p["net_pnl"] for p in range_closed), default=0.0), 2)
+        worst_trade = round(min((p["net_pnl"] for p in range_closed), default=0.0), 2)
+
+        secured_1to1_count = sum(1 for p in range_closed if p["had_1to1"])
+        secured_1to1_rate = round((secured_1to1_count / closed_count * 100.0), 1) if closed_count > 0 else 0.0
+
+        # Max drawdown along deal cashflows in range
+        dd_cum = 0.0
+        dd_peak = 0.0
+        max_drawdown = 0.0
+        max_drawdown_pct = 0.0
+        for d_day, cf in deal_cashflows:
+            if cutoff_key and d_day < cutoff_key:
+                continue
+            dd_cum += cf
+            if dd_cum > dd_peak:
+                dd_peak = dd_cum
+            dd = dd_peak - dd_cum
+            if dd > max_drawdown:
+                max_drawdown = dd
+                peak_equity = balance_before_range + dd_peak
+                max_drawdown_pct = (dd / peak_equity * 100.0) if peak_equity > 0 else 0.0
+
+        # Streaks
+        longest_win_streak = 0
+        longest_loss_streak = 0
+        cur_w = 0
+        cur_l = 0
+        last_streak_type = "NONE"
+        last_streak_count = 0
+        for p in range_closed:
+            if p["net_pnl"] > 0.005:
+                cur_w += 1
+                cur_l = 0
+                longest_win_streak = max(longest_win_streak, cur_w)
+                last_streak_type = "WIN"
+                last_streak_count = cur_w
+            elif p["net_pnl"] < -0.005:
+                cur_l += 1
+                cur_w = 0
+                longest_loss_streak = max(longest_loss_streak, cur_l)
+                last_streak_type = "LOSS"
+                last_streak_count = cur_l
+
+        # Best / worst days
+        best_day_row = max(daily_metrics, key=lambda x: x["realized_pnl"], default=None)
+        worst_day_row = min(daily_metrics, key=lambda x: x["realized_pnl"], default=None)
+        profitable_days = sum(1 for d in daily_metrics if d["realized_pnl"] > 0.005)
+        losing_days = sum(1 for d in daily_metrics if d["realized_pnl"] < -0.005)
+        avg_daily_pnl = round(range_realized_pnl / len(daily_metrics), 2) if daily_metrics else 0.0
+
+        # Today's summary
+        today_dm = next((d for d in daily_metrics if d["date"] == today_key), None)
+        if not today_dm and today_key in daily_raw:
+            traw = daily_raw[today_key]
+            today_pnl = round(traw["realized_pnl"], 2)
+            today_trades = traw["closed_trades"]
+            today_wins = traw["wins"]
+            today_losses = traw["losses"]
+            today_vol = round(traw["volume_lots"], 2)
+            today_1to1 = traw["partial_1to1_hits"]
+        elif today_dm:
+            today_pnl = today_dm["realized_pnl"]
+            today_trades = today_dm["closed_trades"]
+            today_wins = today_dm["wins"]
+            today_losses = today_dm["losses"]
+            today_vol = today_dm["volume_lots"]
+            today_1to1 = today_dm["partial_1to1_hits"]
+        else:
+            today_pnl = 0.0
+            today_trades = 0
+            today_wins = 0
+            today_losses = 0
+            today_vol = 0.0
+            today_1to1 = 0
+
+        today_win_rate = round((today_wins / today_trades * 100.0), 1) if today_trades > 0 else 0.0
+
+        # Symbol attribution in range
+        sym_acc: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "symbol": "",
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "breakeven": 0,
+                "net_pnl": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "volume_lots": 0.0,
+                "secured_1to1": 0,
+            }
+        )
+        for p in range_closed:
+            s = sym_acc[p["symbol"]]
+            s["symbol"] = p["symbol"]
+            s["trades"] += 1
+            s["net_pnl"] += p["net_pnl"]
+            s["volume_lots"] += p["volume"]
+            if p["had_1to1"]:
+                s["secured_1to1"] += 1
+            if p["net_pnl"] > 0.005:
+                s["wins"] += 1
+                s["gross_profit"] += p["net_pnl"]
+            elif p["net_pnl"] < -0.005:
+                s["losses"] += 1
+                s["gross_loss"] += abs(p["net_pnl"])
+            else:
+                s["breakeven"] += 1
+
+        symbol_breakdown = []
+        for sym, s in sym_acc.items():
+            cnt = s["trades"]
+            gp = round(s["gross_profit"], 2)
+            gl = round(s["gross_loss"], 2)
+            pf = round(gp / gl, 2) if gl > 0 else (None if gp == 0 else 99.9)
+            symbol_breakdown.append(
+                {
+                    "symbol": sym,
+                    "trades": cnt,
+                    "wins": s["wins"],
+                    "losses": s["losses"],
+                    "breakeven": s["breakeven"],
+                    "win_rate": round((s["wins"] / cnt * 100.0), 1) if cnt > 0 else 0.0,
+                    "net_pnl": round(s["net_pnl"], 2),
+                    "gross_profit": gp,
+                    "gross_loss": gl,
+                    "profit_factor": pf,
+                    "avg_pnl": round(s["net_pnl"] / cnt, 2) if cnt > 0 else 0.0,
+                    "volume_lots": round(s["volume_lots"], 2),
+                    "secured_1to1": s["secured_1to1"],
+                }
+            )
+        symbol_breakdown.sort(key=lambda x: (-x["trades"], -abs(x["net_pnl"])))
+
+        acc_balance = round(float(account.get("balance", 0.0) or 0.0), 2)
+        acc_equity = round(float(account.get("equity", acc_balance) or acc_balance), 2)
+        net_deposits_clean = round(all_time_deposits, 2)
+        all_time_pnl_clean = round(all_time_realized_pnl, 2)
+
+        return {
+            "status": "success",
+            "mode": mode,
+            "source": source,
+            "days_requested": int(days or 0),
+            "tz_offset_minutes": int(tz_offset_minutes or 0),
+            "today_date": today_key,
+            "account": {
+                "login": account.get("login"),
+                "server": account.get("server"),
+                "currency": account.get("currency", "USD"),
+                "balance": acc_balance,
+                "equity": acc_equity,
+                "floating_pnl": open_floating_pnl,
+                "margin": round(float(account.get("margin", 0.0) or 0.0), 2),
+                "margin_free": round(float(account.get("margin_free", acc_balance) or 0.0), 2),
+                "margin_level": round(float(account.get("margin_level", 0.0) or 0.0), 2),
+                "leverage": account.get("leverage", 500),
+            },
+            "summary": {
+                "today_pnl": today_pnl,
+                "today_net_with_floating": round(today_pnl + open_floating_pnl, 2),
+                "today_trades": today_trades,
+                "today_wins": today_wins,
+                "today_losses": today_losses,
+                "today_win_rate": today_win_rate,
+                "today_volume_lots": today_vol,
+                "today_1to1_hits": today_1to1,
+                "net_deposits": net_deposits_clean,
+                "all_time_realized_pnl": all_time_pnl_clean,
+                "all_time_roi_pct": round((all_time_pnl_clean / net_deposits_clean * 100.0), 2)
+                if net_deposits_clean > 0
+                else 0.0,
+                "range_realized_pnl": range_realized_pnl,
+                "range_roi_pct": round((range_realized_pnl / balance_before_range * 100.0), 2)
+                if balance_before_range > 0
+                else 0.0,
+                "gross_profit": gross_profit,
+                "gross_loss": gross_loss,
+                "total_closed_trades": closed_count,
+                "wins": len(pos_wins),
+                "losses": len(pos_losses),
+                "breakeven": len(pos_bes),
+                "win_rate": win_rate,
+                "profit_factor": profit_factor,
+                "expectancy": expectancy,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
+                "payoff_ratio": payoff_ratio,
+                "best_trade": best_trade,
+                "worst_trade": worst_trade,
+                "best_day": {
+                    "date": best_day_row["date"],
+                    "label": best_day_row["label"],
+                    "pnl": best_day_row["realized_pnl"],
+                }
+                if best_day_row
+                else None,
+                "worst_day": {
+                    "date": worst_day_row["date"],
+                    "label": worst_day_row["label"],
+                    "pnl": worst_day_row["realized_pnl"],
+                }
+                if worst_day_row
+                else None,
+                "max_drawdown": round(max_drawdown, 2),
+                "max_drawdown_pct": round(max_drawdown_pct, 2),
+                "current_streak": {
+                    "type": last_streak_type,
+                    "count": last_streak_count,
+                },
+                "longest_win_streak": longest_win_streak,
+                "longest_loss_streak": longest_loss_streak,
+                "partial_1to1_secured": secured_1to1_count,
+                "partial_1to1_rate": secured_1to1_rate,
+                "total_volume_lots": range_volume,
+                "total_deals": range_deals,
+                "active_trading_days": len(daily_metrics),
+                "profitable_days": profitable_days,
+                "losing_days": losing_days,
+                "avg_daily_pnl": avg_daily_pnl,
+                "open_positions_count": len(open_positions or []),
+                "open_volume_lots": open_volume_lots,
+                "floating_pnl": open_floating_pnl,
+            },
+            "daily_metrics": daily_metrics,
+            "symbol_breakdown": symbol_breakdown,
+            "recent_closed_trades": list(reversed(range_closed[-12:])),
+        }
+
+    async def get_xm_analytics(self, days: int = 30, tz_offset_minutes: int = 0) -> Dict[str, Any]:
+        """
+        Fetches account history, open positions, and day-wise PnL analytics directly from XM MT5.
+        Falls back cleanly to SQLite execution records when running in Demo Sandbox mode.
+        """
+        if self.is_connected and MT5_AVAILABLE and not self.is_mock_mode:
+            def _fetch_mt5_analytics():
+                acc = mt5.account_info()
+                if acc is None:
+                    return None
+                acc_dict = {
+                    "login": acc.login,
+                    "server": acc.server,
+                    "currency": acc.currency,
+                    "balance": round(float(acc.balance), 2),
+                    "equity": round(float(acc.equity), 2),
+                    "profit": round(float(acc.profit), 2),
+                    "margin": round(float(acc.margin), 2),
+                    "margin_free": round(float(acc.margin_free), 2),
+                    "margin_level": round(float(getattr(acc, "margin_level", 0.0) or 0.0), 2),
+                    "leverage": acc.leverage,
+                }
+                open_pos = list(mt5.positions_get() or [])
+                deals = list(mt5.history_deals_get(datetime(2020, 1, 1), datetime(2030, 1, 1)) or [])
+                server_offset_sec = self._detect_server_utc_offset_sec()
+                return self._compute_xm_analytics_from_records(
+                    account=acc_dict,
+                    open_positions=open_pos,
+                    deals=deals,
+                    days=days,
+                    tz_offset_minutes=tz_offset_minutes,
+                    server_offset_sec=server_offset_sec,
+                    mode="LIVE_MT5",
+                    source="XM_MT5_TERMINAL",
+                )
+
+            try:
+                res = await asyncio.wait_for(asyncio.to_thread(_fetch_mt5_analytics), timeout=4.0)
+                if res is not None:
+                    self.account_info = {
+                        **(self.account_info or {}),
+                        **res["account"],
+                        "trade_allowed": True,
+                        "is_demo": True,
+                    }
+                    return res
+            except Exception as e:
+                print(f"[XM ANALYTICS MT5 ERROR] {e}")
+
+        # Demo Sandbox fallback: build analytics from SQLite closed trade logs & open sandbox positions
+        status_snapshot = self.get_account_status()
+        acc_info = dict(status_snapshot.get("account") or {})
+        open_positions = await self.get_open_positions()
+        synthetic_deals: List[Dict[str, Any]] = []
+        base_balance = float(acc_info.get("balance", 10000.0) or 10000.0)
+        total_parsed_pnl = 0.0
+
+        try:
+            async with get_db() as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT trade_id, symbol, action, xm_ticket, xm_execution_price, xm_lots,
+                           status, pnl_notes, managed_1to1, created_at, updated_at
+                    FROM trades
+                    WHERE status IN ('TP_HIT', 'SL_HIT')
+                    ORDER BY id ASC
+                    """
+                )
+                rows = await cur.fetchall()
+                for idx, r in enumerate(rows):
+                    notes = str(r["pnl_notes"] or "")
+                    pnl_match = re.search(r"\(\s*([+-]?)\$([\d,]+(?:\.\d+)?)\s*\)", notes)
+                    pnl_val = 0.0
+                    if pnl_match:
+                        sign = -1.0 if pnl_match.group(1) == "-" else 1.0
+                        pnl_val = sign * float(pnl_match.group(2).replace(",", ""))
+                    total_parsed_pnl += pnl_val
+
+                    ts_raw = str(r["updated_at"] or r["created_at"] or "")
+                    try:
+                        dt_utc = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                        if dt_utc.tzinfo is None:
+                            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+                        epoch = int(dt_utc.timestamp())
+                    except Exception:
+                        epoch = int(time.time())
+
+                    pid = int(r["xm_ticket"] or (70000000 + idx))
+                    side_type = 0 if "BUY" in str(r["action"] or "BUY").upper() else 1
+                    close_type = 1 if side_type == 0 else 0
+                    lots = float(r["xm_lots"] or 0.02)
+                    entry_px = float(r["xm_execution_price"] or 0.0)
+
+                    synthetic_deals.append(
+                        {
+                            "ticket": pid * 10 + 1,
+                            "position_id": pid,
+                            "time": epoch,
+                            "type": side_type,
+                            "entry": 0,
+                            "volume": lots,
+                            "price": entry_px,
+                            "profit": 0.0,
+                            "commission": 0.0,
+                            "swap": 0.0,
+                            "fee": 0.0,
+                            "symbol": str(r["symbol"] or "XAUUSD"),
+                            "comment": f"AlphaSignal {r['trade_id']}",
+                        }
+                    )
+                    status_tag = "[tp]" if r["status"] == "TP_HIT" else "[sl]"
+                    comment_tag = f"1:1 {status_tag}" if r["managed_1to1"] else status_tag
+                    synthetic_deals.append(
+                        {
+                            "ticket": pid * 10 + 2,
+                            "position_id": pid,
+                            "time": epoch + 1,
+                            "type": close_type,
+                            "entry": 1,
+                            "volume": lots,
+                            "price": entry_px,
+                            "profit": round(pnl_val, 2),
+                            "commission": 0.0,
+                            "swap": 0.0,
+                            "fee": 0.0,
+                            "symbol": str(r["symbol"] or "XAUUSD"),
+                            "comment": comment_tag,
+                        }
+                    )
+        except Exception as e:
+            print(f"[XM SANDBOX ANALYTICS ERROR] {e}")
+
+        if synthetic_deals:
+            synthetic_deals.insert(
+                0,
+                {
+                    "ticket": 1,
+                    "position_id": 0,
+                    "time": synthetic_deals[0]["time"] - 60,
+                    "type": 2,
+                    "entry": 0,
+                    "volume": 0.0,
+                    "price": 0.0,
+                    "profit": round(base_balance - total_parsed_pnl, 2),
+                    "commission": 0.0,
+                    "swap": 0.0,
+                    "fee": 0.0,
+                    "symbol": "",
+                    "comment": "Sandbox Starting Balance",
+                },
+            )
+
+        return self._compute_xm_analytics_from_records(
+            account=acc_info,
+            open_positions=open_positions,
+            deals=synthetic_deals,
+            days=days,
+            tz_offset_minutes=tz_offset_minutes,
+            server_offset_sec=0,
+            mode="DEMO_SANDBOX",
+            source="SQLITE_DEMO_FALLBACK",
+        )
 
 xm_executor = XMExecutionEngine()
